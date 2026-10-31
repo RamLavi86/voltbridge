@@ -1,0 +1,24 @@
+{
+  "name": "voltbridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20.19" },
+  "scripts": {
+    "start": "node server.js",
+    "build": "vite build",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.304",
+    "@resvg/resvg-js": "2.6.2",
+    "@vitejs/plugin-react": "5.2.0",
+    "dompurify": "3.4.17",
+    "marked": "16.4.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "vite": "7.3.7",
+    "ws": "8.22.0",
+    "zod": "4.6.7"
+  }
+}
