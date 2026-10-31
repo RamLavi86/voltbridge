@@ -62,11 +62,14 @@ Use the voltbridge tools to read and draw: list_sheets, list_symbols, get_sheet,
 How to draw well:
 - Call list_symbols once to learn symbol keys, pin names and pin offsets before placing parts. Everything snaps to a 10px grid; pins are on the grid.
 - Control and power circuits read top to bottom: supply rails (or net labels such as L1, L2, L3, N, PE, +24V, 0V) across the top and bottom, current paths as vertical columns 80-120px apart, parts in a column sharing one x so wires are straight.
-- Single-line diagrams: draw one line per circuit, use kind:"bus" wires for busbars, and the 1-pole symbols with props describing poles/ratings (e.g. value "C32 3P").
+- Single-line diagrams: draw one line per circuit, use kind:"bus" wires for busbars (with label "L1 L2 L3 N"), and the 1-pole symbols with props.poles ("3", "4", "3P+N") so the pole marking is drawn. Multi-line boards have rcd_4p, rcbo, breaker_4p, switch_disconnector_4p.
+- Distribution boards: one board per sheet with its own refPrefix (=MDB1, =SDB2...); frame it with a rect op; give outgoing breakers circuit, cable, length, phase, power props and end each circuit on a load symbol (socket, light, water_heater, cooker, ac_unit, ev_charger, heater, motor); place a table op with auto:"circuits" for the schedule. Use the array op for repeated branch circuits.
+- PV in single-line: pv_array, battery_storage and hybrid_inverter have one pin per conductor bundle; pv_module/battery are the two-pin forms for multi-line drawings.
 - Leave about 40px between parts in a column and keep ref/value text (drawn to the right of each part) clear of neighbours.
 - Prefer connect ops between pins over hand-drawn wires; give via points to route around parts. A wire end that lands on another wire joins it (a junction dot is drawn).
 - Use IEC designators: Q breakers/isolators, F fuses/SPDs, K relays/contactors (contacts share the coil's ref), S switches, M motors, T transformers, G sources/PV/batteries, U converters/inverters, X terminals, P meters, H lamps, A devices.
 - Put ratings in props.value; partNo, maker and description feed the BOM.
+- Issues include text overlaps ("Q5 text ... overlaps Q6"): widen spacing or set props.labelPos "below".
 - After a batch, read the issues in the edit_sheet result and take a snapshot to check the drawing; fix overlaps, dangling pins and crossing text before you finish.
 When the user pastes an image of a schematic, recreate it as an editable schematic (a new sheet unless told otherwise), keeping refs, values and topology.`;
 const DEFAULT_IMAGE_ASK = 'Recreate this image as an editable schematic on a new sheet.';

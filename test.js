@@ -122,11 +122,69 @@ await ok('snapshot and exports render', async () => {
   for (const f of ['svg', 'bom', 'netlist', 'json']) assert.ok((await call('export', { format: f })).length >= 1);
 });
 
+await ok('house main board: multi-pole, poles marking, array, circuits, prefixes, RTL', async () => {
+  const d = await call('new_sheet', { name: 'Main board' });
+  const sh = String(d.id);
+  const r = await call('edit_sheet', { sheet: sh, ops: [
+    { op: 'sheet', refPrefix: '=MDB1', title: { title: 'לוח ראשי 3x400/230V' } },
+    { op: 'rect', x: 60, y: 60, w: 1100, h: 680, text: 'לוח ראשי MDB-01' },
+    { op: 'add', sym: 'grid', x: 160, y: 90, props: { value: 'רשת 3x400/230V' } },
+    { op: 'add', sym: 'switch_disconnector_4p', ref: 'Q1', x: 160, y: 200, props: { value: '63A' } },
+    { op: 'add', sym: 'rcd_4p', x: 160, y: 300, props: { value: '40A 30mA' } },
+    { op: 'add', sym: 'rcd', x: 400, y: 300, props: { poles: '4', value: '40A 30mA SLD' } },
+    { op: 'connect', from: 'G1:1', to: 'Q1:3' },
+    { op: 'wire', pts: [[120, 400], [1000, 400]], kind: 'bus', label: 'L1 L2 L3 N' },
+    { op: 'connect', from: 'Q2:4', to: [150, 400] },
+    { op: 'array', count: 6, dx: 120, start: 1, ops: [
+      { op: 'add', sym: 'breaker', x: 280, y: 470, props: { value: 'C16', circuit: 'C{i}', cable: '3x2.5mm2', length: '20', phase: 'L1', power: '2kW' } },
+      { op: 'add', sym: 'socket', x: 280, y: 600, props: { ways: '2', description: 'שקעים {i}' } },
+      { op: 'connect', from: [280, 400], to: '$0:1' },
+      { op: 'connect', from: '$0:2', to: '$1:1' },
+    ] },
+    { op: 'add', sym: 'breaker', x: 1060, y: 470, props: { value: 'C25', poles: '3', circuit: 'C7', cable: 'NYY 5x6mm2', phase: 'L1L2L3', power: '9kW' } },
+    { op: 'add', sym: 'water_heater', x: 1060, y: 600, props: { description: 'דוד חשמל' } },
+    { op: 'connect', from: 'Q10:2', to: 'E1:1' },
+    { op: 'table', auto: 'circuits', x: 60, y: 780, text: 'טבלת מעגלים' },
+    { op: 'add', sym: 'n_bar', x: 700, y: 300, props: { ways: '4' } },
+    { op: 'add', sym: 'pe_bar', x: 900, y: 300, props: { ways: '4' } },
+    { op: 'add', sym: 'pv_array', x: 1300, y: 120 },
+    { op: 'add', sym: 'hybrid_inverter', x: 1300, y: 300 },
+    { op: 'add', sym: 'battery_storage', x: 1420, y: 120, rot: 180 },
+    { op: 'connect', from: 'G2:1', to: 'U1:PV' }, { op: 'connect', from: 'G3:1', to: 'U1:BAT' },
+  ] });
+  assert.deepEqual(r.errors, []);
+  const doc2 = s.docs[d.id];
+  assert.equal(doc2.parts.filter((p) => p.sym === 'breaker').length, 7);
+  assert.equal(sch.symbolOf(doc2.parts.find((p) => p.ref === 'Q2')).pins.length, 8, 'rcd_4p has 4 poles');
+  assert.equal(sch.symbolOf(doc2.parts.find((p) => p.ref === 'Q3')).pins.length, 2, 'rcd with poles is single-line');
+  const c = sch.circuits([doc2]);
+  assert.equal(c.length, 7);
+  assert.equal(c[0].circuit, 'C1'); assert.equal(c[0].load, 'שקעים 1', 'load found downstream');
+  // Q1 here is =MDB1-Q1, not the Q1 of sheet 1; giving a taken ref in the same scope renumbers it
+  const r2 = await call('edit_sheet', { sheet: sh, ops: [{ op: 'add', sym: 'breaker', ref: 'Q4', x: 1300, y: 600 }] });
+  assert.match(r2.warnings[0], /Q4 is taken in =MDB1, used Q11/);
+  assert.ok(sch.bom(lib.allSheets(s)).some((b) => b.refs.includes('=MDB1-Q1')) && sch.bom(lib.allSheets(s)).some((b) => b.refs.includes('Q1')));
+  const issues = sch.check(doc2, lib.allSheets(s));
+  assert.ok(!issues.some((x) => /more than one device/.test(x)), issues.join('\n'));
+  assert.ok(issues.some((x) => /phase imbalance/.test(x)), 'all sockets on L1 ' + JSON.stringify(sch.phaseLoads(doc2)));
+  // RTL text goes out in visual order with bidi-override
+  const svg = sch.sheetSvg(doc2, lib.allSheets(s));
+  assert.ok(svg.includes('3x400/230V תשר') && svg.includes('unicode-bidi="bidi-override"'));
+  assert.ok(svg.includes('3x2.5mm²'));
+  fs.writeFileSync('test-out/board.png', await lib.png(svg, 2400));
+});
+
+await ok('text overlap is reported', () => {
+  const t = sch.emptySheet(9);
+  sch.applyOps(t, [{ op: 'add', sym: 'breaker', x: 100, y: 100, props: { value: 'Sockets bath/laundry' } }, { op: 'add', sym: 'breaker', x: 160, y: 100 }]);
+  assert.ok(sch.check(t).some((x) => /Q1 text "Sockets bath\/laundry" overlaps Q2/.test(x)), sch.check(t).join('\n'));
+});
+
 await ok('session round trip and revision conflicts', () => {
   lib.saveSession(s);
   const t = lib.openSession('t1', tmp);
   assert.equal(t.docs[1].parts.length, doc.parts.length);
-  assert.equal(t.sheets.length, 2);
+  assert.equal(t.sheets.length, 3);
   const rev = t.docs[1].rev;
   assert.equal(lib.putSheet(t, { ...t.docs[1], parts: [] }, rev - 1), false);
   assert.equal(lib.putSheet(t, { ...t.docs[1], parts: [] }, rev), true);

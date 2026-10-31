@@ -124,9 +124,10 @@ export async function exportFiles(s, format, doc) {
   if (format === 'svg') for (const d of which) put(`${fileBase(d)}.svg`, sch.sheetSvg(d, sheets, sch.LIGHT, s.project));
   else if (format === 'png') for (const d of which) put(`${fileBase(d)}.png`, await png(sch.sheetSvg(d, sheets, sch.LIGHT, s.project), 3000));
   else if (format === 'bom') put(`${s.name}-bom.csv`, sch.bomCsv(sheets));
+  else if (format === 'circuits') put(`${s.name}-circuits.csv`, sch.circuitsCsv(sheets));
   else if (format === 'netlist') put(`${s.name}-netlist.csv`, sch.netlistCsv(sheets));
   else if (format === 'json') put(`${s.name}.voltbridge.json`, JSON.stringify({ project: s.project, sheets }, null, 1));
-  else throw new Error(`format must be svg, png, bom, netlist or json`);
+  else throw new Error(`format must be svg, png, bom, netlist, circuits or json`);
   return out;
 }
 
@@ -143,9 +144,14 @@ const OPS_DOC = `ops, applied in order (all coordinates snap to the 10px grid; s
 - {op:"connect", from:"K1:A1", to:"F1:2", via?:[[x,y],...]} draws an orthogonal wire between two pins (or [x,y] points). Pass via points to steer it around parts.
 - {op:"wire", pts:[[x,y],...], kind?:"bus"} draws a wire through exact points; segments must be horizontal or vertical. kind "bus" draws a thick busbar (single-line diagrams).
 - {op:"label", text, x, y, kind?:"net"|"text"} a net label at a point on a wire or pin names that net; the same name on any sheet is the same net. kind "text" is a free note.
+- {op:"rect", x, y, w, h, text?, dash?: true} a board/enclosure frame (dashed by default) with its name at the top left.
+- {op:"table", x, y, text?, auto:"circuits"} a circuit schedule built live from the sheet's circuit props; or {op:"table", x, y, text?, cols:[...], rows:[[...], ...]} for any other table.
+- {op:"array", count, dx?, dy?, start?: 1, ops:[...]} repeats sub-ops count times, shifting every x/y/point by k*dx, k*dy. In sub-op strings "{i}" is the copy number (start, start+1, ...) and "$j" is what sub-op j of the same copy added (a ref for add), e.g. a branch circuit: ops [{op:"add",sym:"breaker",x:200,y:300,props:{circuit:"C{i}"}}, {op:"add",sym:"socket",x:200,y:420}, {op:"connect",from:[200,240],to:"$0:1"}, {op:"connect",from:"$0:2",to:"$1:1"}].
+Wires take label?: "L1 L2 L3 N" (drawn past the right end; use it on busbars).
+Part props with meaning: value (rating), partNo, maker, description (BOM); poles on breaker/fuse/disconnector/spd/rcd ("3", "4", "3P+N": draws the IEC pole marking on one line; on rcd it also switches to a 1-in/1-out single-line form); circuit, cable ("NYY 5x6mm2"), length (m), phase ("L1", "L1L2L3"), power ("2kW"), load (name) on outgoing devices: drawn beside the outgoing line, listed by the circuit table and export "circuits", cables summed in the BOM, phase loads checked for imbalance; labelPos "below"|"left" moves the ref/value text; ways on socket (n-way) and on n_bar/pe_bar (terminal count). "mm2" displays as mm², "ohm" as Ω. Hebrew/Arabic text is fine anywhere.
 - {op:"update", id|ref, x?, y?, rot?, mirror?, newRef?, sym?, props?} (props merge, null removes one); moving a part drags the wire ends on its pins. For wires: {op:"update", id, pts?, kind?}; labels: text, x, y.
 - {op:"delete", id|ref} a part, wire or label.
-- {op:"sheet", name?, size?: A4|A3|A2|A1, title?: {title, drawingNo, rev, author, date}}.
+- {op:"sheet", name?, size?: A4|A3|A2|A1, refPrefix?, title?: {title, drawingNo, rev, author, date}}. refPrefix (e.g. "=MDB2") is the board's location designation: each prefix numbers its parts from Q1/X1... again, refs are unique per prefix, BOM/netlist/cross refs use "=MDB2-Q1". Draw one board per sheet with its own refPrefix. Adding a ref that is already taken in the prefix renumbers the part (see warnings).
 Several parts may share a ref: a coil K1 and its contacts K1 (contact_no/contact_nc/contactor_3p), each with distinct pin numbers (13-14, 23-24, 21-22...). Pin refs "K1:23" find the right one.`;
 
 export function makeTools(s, ctx) {
@@ -166,8 +172,8 @@ export function makeTools(s, ctx) {
         changed(doc);
         return { ...text({ ...r, issues: sch.check(doc, allSheets(s)).slice(0, 40) }), isError: r.errors.length === ops.length && ops.length > 0 };
       }), opts),
-    tool('new_sheet', 'Create a new empty sheet (default A3 landscape, 1680x1190 px) and return its id.', { name: z.string().optional(), size: z.enum(['A4', 'A3', 'A2', 'A1']).optional() },
-      guard(async ({ name, size }) => { const d = addSheet(s, name, size); ctx.sheetsChanged(d.id); return text({ id: d.id, name: d.name, size: d.size, extent: sch.SIZES[d.size] }); }), opts),
+    tool('new_sheet', 'Create a new empty sheet (default A3 landscape, 1680x1190 px) and return its id. refPrefix: the board designation, e.g. "=MDB2" (designators restart per prefix).', { name: z.string().optional(), size: z.enum(['A4', 'A3', 'A2', 'A1']).optional(), refPrefix: z.string().optional() },
+      guard(async ({ name, size, refPrefix }) => { const d = addSheet(s, name, size); if (refPrefix) d.refPrefix = refPrefix; ctx.sheetsChanged(d.id); return text({ id: d.id, name: d.name, size: d.size, extent: sch.SIZES[d.size] }); }), opts),
     tool('delete_sheet', 'Delete a sheet.', { sheet: z.string() },
       guard(async ({ sheet }) => { const d = findSheet(s, sheet); removeSheet(s, d.id); ctx.sheetsChanged(); return text(`deleted sheet ${d.id} "${d.name}"`); }), opts),
     tool('set_project', 'Set project-wide title block fields shown on every sheet (title, drawingNo, rev, author, date, company). A sheet\'s own title fields override them.',
@@ -182,8 +188,8 @@ export function makeTools(s, ctx) {
       guard(async () => text(sch.netlist(allSheets(s)))), opts),
     tool('get_bom', 'Bill of materials of the whole project: [{qty, refs, symbol, value, partNo, maker, description}]. Contacts are folded into their device.', {},
       guard(async () => text(sch.bom(allSheets(s)))), opts),
-    tool('export', 'Write files to the output folder: svg or png (one sheet, or all when sheet is omitted), bom or netlist (CSV), json (the whole project). Returns the paths.',
-      { format: z.enum(['svg', 'png', 'bom', 'netlist', 'json']), sheet: z.string().optional() },
+    tool('export', 'Write files to the output folder: svg or png (one sheet, or all when sheet is omitted), bom, netlist or circuits (the circuit schedule) as CSV, json (the whole project). Returns the paths.',
+      { format: z.enum(['svg', 'png', 'bom', 'netlist', 'circuits', 'json']), sheet: z.string().optional() },
       guard(async ({ format, sheet }) => { const f = await exportFiles(s, format, sheet ? findSheet(s, sheet) : null); ctx.exported?.(f); return text(f); }), opts),
   ];
 }

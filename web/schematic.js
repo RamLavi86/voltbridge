@@ -43,15 +43,34 @@ def('pv_module', { name: 'PV module', cat: 'Sources', prefix: 'G', pins: two('+'
 def('grid', { name: 'Utility grid', cat: 'Sources', prefix: 'G', pins: [{ n: '1', x: 0, y: 30 }], box: [-16, -10, 16, 30], shapes: [{ d: 'M-16 -10h32v24h-32zM-16 -2H16M-16 6H16M-8 -10V14M0 -10V14M8 -10V14M0 14V30' }] });
 def('generator', { name: 'Generator', cat: 'Sources', prefix: 'G', pins: [{ n: '1', x: 0, y: 30 }], box: [-16, -16, 16, 30], shapes: [{ c: [0, 0, 16] }, { t: [0, 4, 'G', 13] }, { d: 'M0 16V30' }] });
 
+def('pv_array', { name: 'PV array (single-line)', cat: 'Sources', prefix: 'G', pins: [{ n: '1', x: 0, y: 40 }], box: [-30, -36, 20, 40],
+  shapes: [{ d: 'M0 16V40M-16 -16h32v32h-32z' }, { d: 'M-7 -3H7L0 7z', fill: true }, { d: 'M-7 7H7M-30 -30l10 10M-23.5 -20H-20V-23.5M-24 -36l10 10M-17.5 -26H-14V-29.5' }], value: '10kWp' });
+def('battery_storage', { name: 'Battery storage (single-line)', cat: 'Sources', prefix: 'G', pins: [{ n: '1', x: 0, y: -30 }], box: [-18, -30, 18, 14],
+  shapes: [{ d: 'M0 -30V-14M-18 -14h36v28h-36zM-9 -7V7M-4 -3V3M4 -7V7M9 -3V3' }], value: '10kWh' });
+
 // Protection and switching (IEC 60617)
-def('fuse', { name: 'Fuse', cat: 'Protection', prefix: 'F', pins: two(), box: [-6, -30, 6, 30], shapes: [{ d: 'M0 -30V30M-5 -14h10v28h-10z' }], value: '10A' });
-def('breaker', { name: 'Circuit breaker, 1-pole', cat: 'Protection', prefix: 'Q', pins: two(), box: [-10, -30, 6, 30], shapes: [{ d: leads(30) + NO + 'M-4 -14L4 -6M4 -14L-4 -6' }], value: 'C16' });
+def('fuse', { name: 'Fuse', cat: 'Protection', prefix: 'F', pins: two(), box: [-6, -30, 6, 30], shapes: [{ d: 'M0 -30V30M-5 -14h10v28h-10z' }], value: '10A' , poleMark: true });
+def('breaker', { name: 'Circuit breaker, 1-pole', cat: 'Protection', prefix: 'Q', pins: two(), box: [-10, -30, 6, 30], shapes: [{ d: leads(30) + NO + 'M-4 -14L4 -6M4 -14L-4 -6' }], value: 'C16' , poleMark: true });
 def('breaker_3p', { name: 'Circuit breaker, 3-pole', cat: 'Protection', prefix: 'Q', pins: [{ n: '1', x: -20, y: -30 }, { n: '3', x: 0, y: -30 }, { n: '5', x: 20, y: -30 }, { n: '2', x: -20, y: 30 }, { n: '4', x: 0, y: 30 }, { n: '6', x: 20, y: 30 }], box: [-30, -30, 26, 30],
   shapes: [-20, 0, 20].map((x) => ({ d: `M${x} -30V-10M${x} 10V30M${x} 10L${x - 9} -8M${x - 4} -14L${x + 4} -6M${x + 4} -14L${x - 4} -6` })).concat([{ d: 'M-24 1H16', dash: true }]), value: 'C32' });
-def('rcd', { name: 'RCD / RCBO, 2-pole', cat: 'Protection', prefix: 'Q', pins: [{ n: '1', x: -10, y: -30 }, { n: '3', x: 10, y: -30 }, { n: '2', x: -10, y: 30 }, { n: '4', x: 10, y: 30 }], box: [-20, -30, 30, 30],
-  shapes: [-10, 10].map((x) => ({ d: `M${x} -30V-10M${x} 10V30M${x} 10L${x - 9} -8M${x - 4} -14L${x + 4} -6M${x + 4} -14L${x - 4} -6` })).concat([{ d: 'M-14 1H22', dash: true }, { d: 'M22 -6h8v14h-8z' }]), value: '30mA' });
-def('disconnector', { name: 'Disconnector / isolator', cat: 'Protection', prefix: 'Q', pins: two(), box: [-10, -30, 6, 30], shapes: [{ d: leads(30) + NO + 'M-5 -10H5' }] });
-def('spd', { name: 'Surge protective device', cat: 'Protection', prefix: 'F', pins: two('1', 'PE'), box: [-7, -30, 7, 30], shapes: [{ d: leads(30, 14) + 'M-6 -14h12v28h-12zM0 -14V-4L-3 2H3L0 8V14' }, { d: 'M0 14L-2.5 8H2.5z', fill: true }] });
+// Multi-pole devices: poles at x = -30, -10, 10, 30 (or -10, 10), pins 1/3/5/N on top and 2/4/6/N' below.
+const pole = (x, cross) => `M${x} -30V-10M${x} 10V30M${x} 10L${x - 9} -8` + (cross ? `M${x - 4} -14L${x + 4} -6M${x + 4} -14L${x - 4} -6` : '');
+const polePins = (xs, top, bot) => [...xs.map((x, i) => ({ n: top[i], x, y: -30 })), ...xs.map((x, i) => ({ n: bot[i], x, y: 30 }))];
+const X4 = [-30, -10, 10, 30], X2 = [-10, 10];
+const P4 = polePins(X4, ['1', '3', '5', 'N'], ['2', '4', '6', "N'"]), P2N = polePins(X2, ['1', 'N'], ['2', "N'"]);
+// residual-current release: a toroid around the poles at y=20, tied to the mechanism, and a test button T at tx
+const toroid = (r, tx) => [{ d: `M${-r} 20a${r} 5 0 1 0 ${2 * r} 0a${r} 5 0 1 0 ${-2 * r} 0` }, { d: `M${r} 20H${tx}V1M${-r + 4} 1H${tx}`, dash: true }, { d: `M${tx} 1V-14M${tx - 4} -14H${tx + 4}` }, { t: [tx + 7, -17, 'T', 8] }];
+// single-line form of the RCD: one pin in, one out (used when props.poles is set)
+const rcdSld = { pins: two(), box: [-10, -30, 26, 30], shapes: [{ d: leads(30) + NO + 'M-8 20a8 3 0 1 0 16 0a8 3 0 1 0 -16 0' }, { d: 'M8 20H18V1M-4.5 1H18', dash: true }, { d: 'M18 1V-14M14 -14H22' }, { t: [25, -17, 'T', 8] }] };
+def('rcd', { name: 'RCD, 2-pole (set poles for single-line)', cat: 'Protection', prefix: 'Q', pins: polePins(X2, ['1', '3'], ['2', '4']), box: [-20, -30, 36, 30],
+  shapes: [{ d: X2.map((x) => pole(x)).join('') }, ...toroid(14, 26)], value: '40A 30mA', sld: rcdSld, poleMark: true });
+def('rcd_4p', { name: 'RCD, 4-pole', cat: 'Protection', prefix: 'Q', pins: P4, box: [-40, -30, 56, 30], shapes: [{ d: X4.map((x) => pole(x)).join('') }, ...toroid(36, 46)], value: '40A 30mA' });
+def('rcbo', { name: 'RCBO, 1P+N', cat: 'Protection', prefix: 'Q', pins: P2N, box: [-20, -30, 36, 30], shapes: [{ d: X2.map((x) => pole(x, true)).join('') }, ...toroid(14, 26)], value: 'C16 30mA' });
+def('breaker_4p', { name: 'Circuit breaker, 3P+N', cat: 'Protection', prefix: 'Q', pins: P4, box: [-40, -30, 36, 30], shapes: [{ d: X4.map((x) => pole(x, true)).join('') }, { d: 'M-34 1H26', dash: true }], value: 'C40' });
+def('switch_disconnector_4p', { name: 'Switch-disconnector, 4-pole (main switch)', cat: 'Protection', prefix: 'Q', pins: P4, box: [-40, -30, 36, 30],
+  shapes: [{ d: X4.map((x) => pole(x) + `M${x - 5} -10H${x + 5}`).join('') }, ...X4.map((x) => ({ c: [x, -13, 2.5] })), { d: 'M-34 1H26', dash: true }], value: '63A' });
+def('disconnector', { name: 'Disconnector / isolator', cat: 'Protection', prefix: 'Q', pins: two(), box: [-10, -30, 6, 30], shapes: [{ d: leads(30) + NO + 'M-5 -10H5' }] , poleMark: true });
+def('spd', { name: 'Surge protective device', cat: 'Protection', prefix: 'F', pins: two('1', 'PE'), box: [-7, -30, 7, 30], shapes: [{ d: leads(30, 14) + 'M-6 -14h12v28h-12zM0 -14V-4L-3 2H3L0 8V14' }, { d: 'M0 14L-2.5 8H2.5z', fill: true }] , poleMark: true });
 
 def('switch_no', { name: 'Switch, NO', cat: 'Switching', prefix: 'S', pins: two('13', '14'), box: [-10, -30, 4, 30], shapes: [{ d: leads(30) + NO }] });
 def('switch_nc', { name: 'Switch, NC', cat: 'Switching', prefix: 'S', pins: two('11', '12'), box: [-4, -30, 10, 30], shapes: [{ d: leads(30) + NC }] });
@@ -71,6 +90,14 @@ def('motor_dc', { name: 'Motor, DC', cat: 'Loads', prefix: 'M', pins: two('+', '
 def('lamp', { name: 'Lamp / indicator', cat: 'Loads', prefix: 'H', pins: two('X1', 'X2'), box: [-10, -30, 10, 30], shapes: [{ d: leads(30, 10) + 'M-7 -7L7 7M7 -7L-7 7' }, { c: [0, 0, 10] }] });
 def('heater', { name: 'Heater', cat: 'Loads', prefix: 'E', pins: two(), box: [-8, -30, 8, 30], shapes: [{ d: leads(30, 15) + 'M-7 -15h14v30h-14zM-7 -5H7M-7 5H7' }] });
 def('load', { name: 'Load (generic)', cat: 'Loads', prefix: 'E', pins: [{ n: '1', x: 0, y: -30 }], box: [-20, -30, 20, 14], shapes: [{ d: 'M0 -30V-14M-20 -14h40v28h-40z' }, { t: [0, 0, 'LOAD', 8] }] });
+// Installation loads (IEC 60617 part 11 style), one pin on top: a single-line circuit ends here
+const appliance = (inner) => [{ d: 'M0 -30V-14M-16 -14h32v28h-32z' }, ...inner];
+def('socket', { name: 'Socket outlet (set ways for n-way)', cat: 'Loads', prefix: 'X', pins: [{ n: '1', x: 0, y: -30 }], box: [-11, -30, 11, 5], shapes: [{ d: 'M0 -30V-6M-11 -6H11M-9 -6a9 9 0 0 0 18 0' }, { t: [0, -1, '{ways}', 7] }], props: { ways: '' } });
+def('light', { name: 'Lighting point', cat: 'Loads', prefix: 'E', pins: [{ n: '1', x: 0, y: -30 }], box: [-10, -30, 10, 10], shapes: [{ d: 'M0 -30V-10M-7 -7L7 7M7 -7L-7 7' }, { c: [0, 0, 10] }] });
+def('water_heater', { name: 'Water heater / boiler', cat: 'Loads', prefix: 'E', pins: [{ n: '1', x: 0, y: -30 }], box: [-16, -30, 16, 14], shapes: appliance([{ d: 'M-8 -6h16v12h-16zM-8 0H8' }, { d: 'M-10 9q2.5 -2 5 0t5 0t5 0t5 0' }]) });
+def('cooker', { name: 'Cooker / hob', cat: 'Loads', prefix: 'E', pins: [{ n: '1', x: 0, y: -30 }], box: [-16, -30, 16, 14], shapes: appliance([{ c: [-7, -6, 3.5] }, { c: [7, -6, 3.5] }, { c: [-7, 6, 3.5] }, { c: [7, 6, 3.5] }]) });
+def('ac_unit', { name: 'Air conditioner', cat: 'Loads', prefix: 'E', pins: [{ n: '1', x: 0, y: -30 }], box: [-16, -30, 16, 14], shapes: appliance([{ d: 'M0 -9V9M-8 -4.5L8 4.5M-8 4.5L8 -4.5M-3 -9L0 -6L3 -9M-3 9L0 6L3 9' }]) });
+def('ev_charger', { name: 'EV charger', cat: 'Loads', prefix: 'E', pins: [{ n: '1', x: 0, y: -30 }], box: [-16, -30, 16, 14], shapes: appliance([{ t: [0, -4, 'EV', 9] }, { d: 'M-6 5h12M-3 5v4M3 5v4' }]) });
 def('transformer', { name: 'Transformer', cat: 'Loads', prefix: 'T', pins: two('1', '2', 30), box: [-12, -30, 12, 30], shapes: [{ d: 'M0 -30V-20M0 20V30' }, { c: [0, -7, 13] }, { c: [0, 7, 13] }], value: '400/230V' });
 def('ct', { name: 'Current transformer', cat: 'Measurement', prefix: 'T', pins: two('P1', 'P2'), box: [-9, -30, 9, 30], shapes: [{ d: 'M0 -30V30' }, { c: [0, 0, 8] }] });
 def('meter', { name: 'Meter (V, A, W, Hz)', cat: 'Measurement', prefix: 'P', pins: two(), box: [-12, -30, 12, 30], shapes: [{ d: leads(30, 12) }, { c: [0, 0, 12] }, { t: [0, 0, '{unit}', 11] }], props: { unit: 'V' } });
@@ -78,10 +105,15 @@ def('energy_meter', { name: 'Energy meter (kWh)', cat: 'Measurement', prefix: 'P
 
 // Power conversion and building blocks
 def('inverter', { name: 'Inverter (DC/AC)', cat: 'Conversion', prefix: 'U', pins: [{ n: 'DC', x: 0, y: -40 }, { n: 'AC', x: 0, y: 40 }], box: [-20, -40, 20, 40], shapes: [{ d: 'M0 -40V-20M0 20V40M-20 -20h40v40h-40zM-20 20L20 -20' }, { t: [-9, -9, '=', 11] }, { t: [9, 9, '~', 13] }], value: '' });
+def('hybrid_inverter', { name: 'Hybrid inverter (PV + battery)', cat: 'Conversion', prefix: 'U', pins: [{ n: 'PV', x: -20, y: -40 }, { n: 'BAT', x: 20, y: -40 }, { n: 'AC', x: 0, y: 40 }], box: [-30, -40, 30, 40],
+  shapes: [{ d: 'M-20 -40V-20M20 -40V-20M0 20V40M-30 -20h60v40h-60zM-30 20L30 -20' }, { t: [-16, -8, '=', 11] }, { t: [16, 9, '~', 13] }, { t: [-20, -27, 'PV', 6], anchor: 'end' }, { t: [20, -27, 'BAT', 6], anchor: 'start' }], value: '10kW' });
 def('converter_dc', { name: 'DC/DC converter', cat: 'Conversion', prefix: 'U', pins: [{ n: 'IN', x: 0, y: -40 }, { n: 'OUT', x: 0, y: 40 }], box: [-20, -40, 20, 40], shapes: [{ d: 'M0 -40V-20M0 20V40M-20 -20h40v40h-40zM-20 20L20 -20' }, { t: [-9, -9, '=', 11] }, { t: [9, 9, '=', 11] }] });
 def('rectifier', { name: 'Rectifier (AC/DC)', cat: 'Conversion', prefix: 'U', pins: [{ n: 'AC', x: 0, y: -40 }, { n: 'DC', x: 0, y: 40 }], box: [-20, -40, 20, 40], shapes: [{ d: 'M0 -40V-20M0 20V40M-20 -20h40v40h-40zM-20 20L20 -20' }, { t: [-9, -9, '~', 13] }, { t: [9, 9, '=', 11] }] });
 def('terminal', { name: 'Terminal', cat: 'Wiring', prefix: 'X', pins: two('1', '2', 10), box: [-4, -10, 4, 10], shapes: [{ d: 'M0 -10V-3.5M0 3.5V10' }, { c: [0, 0, 3.5] }] });
 def('connector', { name: 'Plug / socket', cat: 'Wiring', prefix: 'X', pins: two('1', '2', 20), box: [-7, -20, 7, 20], shapes: [{ d: 'M0 -20V-4M0 4V20M-6 -4H6M-6 4a6 6 0 0 0 12 0' }] });
+// N / PE bars: a bar with props.ways terminals hanging down, 20px apart (pins 1..n)
+def('n_bar', { name: 'Neutral bar', cat: 'Wiring', prefix: 'X', dynamic: true, bar: 'N', props: { ways: '6' } });
+def('pe_bar', { name: 'Earth (PE) bar', cat: 'Wiring', prefix: 'X', dynamic: true, bar: 'PE', props: { ways: '6' } });
 // A box with named pins on each side, 20px apart: props.left/right/top/bottom are pin name lists, props.label the text.
 def('block', { name: 'Block (PLC, IC, device)', cat: 'Wiring', prefix: 'A', dynamic: true, props: { label: 'DEVICE', left: '1,2', right: '3,4', top: '', bottom: '' } });
 
@@ -90,9 +122,27 @@ export const CATEGORIES = [...new Set(Object.values(S).map((s) => s.cat))];
 
 const list = (v) => (Array.isArray(v) ? v.map(String) : String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean));
 // The resolved symbol for a part: blocks are built from their props.
+// "3" -> 3, "3P+N" -> 4, "1P+N" -> 2
+export const poleCount = (v) => { const m = /(\d+)/.exec(String(v ?? '')); return m ? +m[1] + (/\+\s*N/i.test(v) ? 1 : 0) : 0; };
+// IEC 60617 pole marking on a single line: n short oblique strokes, or one stroke and the number when n > 3
+function poleTicks(n) {
+  if (n <= 1) return [];
+  if (n > 3) return [{ d: 'M-4 -20L4 -24' }, { t: [-6, -22, String(n), 8], anchor: 'end' }];
+  return [{ d: Array.from({ length: n }, (_, i) => { const y = -22 + (i - (n - 1) / 2) * 4; return `M-4 ${y + 2}L4 ${y - 2}`; }).join('') }];
+}
+function barSymbol(s, p) {
+  const n = Math.max(1, Math.min(40, parseInt(p.ways, 10) || 6)), x0 = -(n - 1) * 10;
+  const pins = Array.from({ length: n }, (_, i) => ({ n: String(i + 1), x: x0 + i * 20, y: 20 }));
+  const shapes = [{ d: `M${x0 - 10} -2h${(n - 1) * 20 + 20}v4h${-((n - 1) * 20 + 20)}z`, fill: true }, { d: pins.map((q) => `M${q.x} 2V20`).join('') }, ...pins.map((q) => ({ c: [q.x, 11, 2.2] })), { t: [x0 - 14, 0, s.bar, 9], anchor: 'end' }];
+  return { ...s, pins, box: [x0 - 30, -6, -x0 + 10, 20], shapes };
+}
 export function symbolOf(part) {
-  const s = S[part.sym];
+  let s = S[part.sym];
   if (!s) throw new Error(`unknown symbol "${part.sym}"`);
+  const poles = s.poleMark ? poleCount(part.props?.poles) : 0;
+  if (s.sld && part.props?.poles != null && part.props.poles !== '') s = { ...s, ...s.sld };
+  if (poles > 1) s = { ...s, shapes: [...s.shapes, ...poleTicks(poles)] };
+  if (s.bar) return barSymbol(s, { ...s.props, ...part.props });
   if (!s.dynamic) return s;
   const p = { ...s.props, ...part.props };
   const L = list(p.left), R = list(p.right), T = list(p.top), B = list(p.bottom);
@@ -206,7 +256,7 @@ export function netlist(sheets) {
   for (const sh of sheets) for (const n of connectivity(sh).nets) {
     const k = n.named ? n.name : `${sh.name}/${n.name}`;
     if (!out.has(k)) out.set(k, { name: k, nodes: new Set(), sheets: new Set() });
-    n.nodes.forEach((x) => out.get(k).nodes.add(x)); out.get(k).sheets.add(sh.name);
+    n.nodes.forEach((x) => out.get(k).nodes.add(fullRef(sh, x))); out.get(k).sheets.add(sh.name);
   }
   return [...out.values()].map((n) => ({ name: n.name, nodes: [...n.nodes].sort(), sheets: [...n.sheets] })).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 }
@@ -220,14 +270,70 @@ export function bom(sheets) {
     const v = p.props?.value ?? '', pn = p.props?.partNo ?? '', mf = p.props?.maker ?? '';
     const k = [p.sym, v, pn, mf].join('|');
     if (!rows.has(k)) rows.set(k, { refs: new Set(), symbol: sym.name, value: v, partNo: pn, maker: mf, description: p.props?.description ?? '' });
-    rows.get(k).refs.add(p.ref);
+    rows.get(k).refs.add(fullRef(sh, p.ref));
   }
-  return [...rows.values()].map((r) => ({ ...r, qty: r.refs.size, refs: [...r.refs].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) }))
-    .sort((a, b) => a.refs[0].localeCompare(b.refs[0], undefined, { numeric: true }));
+  // cables named on circuits (props.cable), one line per type with the total length
+  const cables = new Map();
+  for (const sh of sheets) for (const p of sh.parts) {
+    const c = p.props?.cable; if (!c) continue;
+    if (!cables.has(c)) cables.set(c, { refs: new Set(), symbol: 'Cable', value: c, partNo: '', maker: '', len: 0 });
+    cables.get(c).refs.add(fullRef(sh, p.ref)); cables.get(c).len += parseFloat(p.props.length) || 0;
+  }
+  for (const [c, r] of cables) rows.set(`cable|${c}`, { ...r, description: r.len ? `total ${r.len} m` : 'length not given', cable: true });
+  return [...rows.values()].map(({ len, ...r }) => ({ ...r, qty: r.refs.size, refs: [...r.refs].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) }))
+    .sort((a, b) => (a.cable || 0) - (b.cable || 0) || a.refs[0].localeCompare(b.refs[0], undefined, { numeric: true }));
 }
 const csvCell = (v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 export const bomCsv = (sheets) => ['Qty,Refs,Symbol,Value,Part number,Maker,Description', ...bom(sheets).map((r) => [r.qty, r.refs.join(' '), r.symbol, r.value, r.partNo, r.maker, r.description].map(csvCell).join(','))].join('\n') + '\n';
 export const netlistCsv = (sheets) => ['Net,Node,Sheets', ...netlist(sheets).flatMap((n) => n.nodes.map((x) => [n.name, x, n.sheets.join(' ')].map(csvCell).join(',')))].join('\n') + '\n';
+
+// Circuit schedule: every part with circuit/cable/phase props (normally the outgoing breakers), with the load it feeds.
+const CIRCUIT_PROPS = ['circuit', 'cable', 'phase'];
+export const CIRCUIT_COLS = [['circuit', 'Circuit'], ['ref', 'Device'], ['device', 'Rating'], ['cable', 'Cable'], ['length', 'Length'], ['phase', 'Phase'], ['power', 'Power'], ['load', 'Load']];
+export function circuits(sheets) {
+  const rows = [];
+  for (const sh of sheets) {
+    let conn = null;
+    for (const p of sh.parts) {
+      const pr = p.props || {};
+      if (!CIRCUIT_PROPS.some((k) => pr[k])) continue;
+      let load = pr.load || '';
+      if (!load) { // the load part this circuit feeds: on the nets of its pins other than the first
+        conn ||= connectivity(sh);
+        const mine = new Set(pinsOf(p).slice(1).map((q) => conn.pointNet.get(key(q.x, q.y))).filter((x) => x != null));
+        const refs = [...mine].flatMap((i) => conn.nets[i].nodes.map((n) => n.split(':')[0])).filter((r) => r !== p.ref);
+        const cand = refs.map((r) => sh.parts.find((x) => x.ref === r)).filter(Boolean).sort((a, b) => (symbolOf(b).cat === 'Loads') - (symbolOf(a).cat === 'Loads'))[0];
+        if (cand) load = cand.props?.description || cand.props?.value || symbolOf(cand).name;
+      }
+      rows.push({ sheet: sh.name, circuit: pr.circuit || '', ref: fullRef(sh, p.ref), device: pr.value || '', cable: pr.cable || '', length: pr.length || '', phase: pr.phase || '', power: pr.power || '', load });
+    }
+  }
+  return rows.sort((a, b) => String(a.circuit).localeCompare(String(b.circuit), undefined, { numeric: true }) || a.ref.localeCompare(b.ref, undefined, { numeric: true }));
+}
+export const circuitsCsv = (sheets) => [['Sheet', ...CIRCUIT_COLS.map((c) => c[1])].join(','), ...circuits(sheets).map((r) => [r.sheet, ...CIRCUIT_COLS.map(([k]) => r[k])].map(csvCell).join(','))].join('\n') + '\n';
+// "2kW" / "1500 W" / "1.5" (kW) -> watts
+const watts = (v) => { const m = /([\d.]+)\s*(k|M)?W?/i.exec(String(v ?? '')); if (!m) return 0; const n = +m[1]; return /W/i.test(v) ? n * (m[2] ? (m[2].toLowerCase() === 'k' ? 1e3 : 1e6) : 1) : n * 1e3; };
+// Per-phase load of a sheet from the circuits' phase + power props. A 3-phase circuit (phase "L1L2L3" or "3P") counts a third on each.
+export function phaseLoads(sheet) {
+  const t = { L1: 0, L2: 0, L3: 0 };
+  let n = 0;
+  for (const r of circuits([sheet])) {
+    const w = watts(r.power); if (!w || !r.phase) continue;
+    let ph = String(r.phase).toUpperCase().match(/L[123]/g) || [];
+    if (!ph.length && /3/.test(r.phase)) ph = ['L1', 'L2', 'L3'];
+    ph = [...new Set(ph)]; if (!ph.length) continue;
+    ph.forEach((x) => { t[x] += w / ph.length; }); n++;
+  }
+  return n ? t : null;
+}
+const kw = (w) => `${(w / 1000).toFixed(1)}kW`;
+
+// Approximate boxes of a part's own text (ref, value, cable block), for overlap checks.
+const textW = (t, size) => String(t).length * size * 0.6;
+export function textBoxes(p) {
+  return partTexts(p).map((t) => { const w = textW(t.text, t.size), x0 = t.anchor === 'end' ? t.x - w : t.anchor === 'middle' ? t.x - w / 2 : t.x; return { text: t.text, box: [x0, t.y - t.size / 2, x0 + w, t.y + t.size / 2] }; });
+}
+const overlap = (a, b) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
 
 // Sheet issues Claude and the user should know about.
 export function check(sheet, sheets = [sheet]) {
@@ -238,39 +344,56 @@ export function check(sheet, sheets = [sheet]) {
     const sym = symbolOf(p);
     for (const q of pinsOf(p)) if (!touched.has(key(q.x, q.y))) out.push(`${p.ref}:${q.name} is not connected`);
     if (!sym.power && !sym.contact) {
-      const dup = sheets.flatMap((s) => s.parts).filter((o) => o !== p && o.ref === p.ref && !symbolOf(o).contact);
+      const dup = peers(sheets, sheet).flatMap((s) => s.parts).filter((o) => o !== p && o.id !== p.id && o.ref === p.ref && !symbolOf(o).contact);
       if (dup.length) out.push(`${p.ref} is used by more than one device`);
     }
-    if (sym.contact && !sheets.some((s) => s.parts.some((o) => o.ref === p.ref && !symbolOf(o).contact))) out.push(`contact ${p.ref} has no coil/device ${p.ref}`);
+    if (sym.contact && !refTaken(sheets, sheet, p.ref)) out.push(`contact ${p.ref} has no coil/device ${p.ref}`);
   }
   for (const w of sheet.wires) for (let i = 1; i < w.pts.length; i++) { const [a, b] = w.pts[i - 1], [c, d] = w.pts[i]; if (a !== c && b !== d) { out.push(`wire ${w.id} has a diagonal segment`); break; } }
   for (const n of nets) if (n.nodes.length === 1 && !n.named) out.push(`net ${n.name} only reaches ${n.nodes[0]}`);
+  // ponytail: O(n^2) over parts, fine for a few hundred per sheet; grid-bucket it if sheets get much bigger
+  const tb = sheet.parts.filter((p) => !symbolOf(p).power).map((p) => ({ p, boxes: textBoxes(p), bbox: bboxOf(p) }));
+  for (const a of tb) for (const t of a.boxes) for (const b of tb) {
+    if (b === a) continue;
+    if (overlap(t.box, b.bbox)) { out.push(`${a.p.ref} text "${t.text}" overlaps ${b.p.ref}`); continue; }
+    if (b.p.id < a.p.id && b.boxes.some((u) => overlap(t.box, u.box))) out.push(`${a.p.ref} text "${t.text}" overlaps the text of ${b.p.ref}`);
+  }
+  const ph = phaseLoads(sheet);
+  if (ph) { const v = Object.values(ph), hi = Math.max(...v), lo = Math.min(...v); if (hi > 0 && (hi - lo) / hi > 0.2) out.push(`phase imbalance: L1 ${kw(ph.L1)}, L2 ${kw(ph.L2)}, L3 ${kw(ph.L3)} (${Math.round((hi - lo) / hi * 100)}% between the highest and lowest)`); }
   return [...new Set(out)];
 }
 
 // Pin names as contact pairs: [1,3,5,2,4,6] -> "1-2 3-4 5-6", [13,14] -> "13-14".
 const pairs = (n) => n.slice(0, n.length / 2).map((a, i) => `${a}-${n[i + n.length / 2]}`).join(' ');
-// Cross references: for each coil/device, where its contacts are (zone), and for each contact, where its coil is.
+// Cross references, keyed by full designation: for each coil/device, where its contacts are (zone), and for each contact, where its coil is.
 export function crossRefs(sheets) {
   const where = {};
   for (const sh of sheets) for (const p of sh.parts) {
     const sym = symbolOf(p);
     if (sym.power) continue;
-    (where[p.ref] ||= { device: null, contacts: [] });
+    const r = fullRef(sh, p.ref);
+    (where[r] ||= { device: null, contacts: [] });
     const loc = `${sheets.length > 1 ? sh.id + '/' : ''}${zoneOf(sh, p.x, p.y)}`;
-    if (sym.contact) where[p.ref].contacts.push({ id: p.id, sheet: sh.id, loc, kind: p.sym === 'contact_nc' ? 'NC' : 'NO', pins: pairs(pinsOf(p).map((q) => q.name)) });
-    else where[p.ref].device = { id: p.id, sheet: sh.id, loc };
+    if (sym.contact) where[r].contacts.push({ id: p.id, sheet: sh.id, loc, kind: p.sym === 'contact_nc' ? 'NC' : 'NO', pins: pairs(pinsOf(p).map((q) => q.name)) });
+    else where[r].device = { id: p.id, sheet: sh.id, loc };
   }
   return where;
 }
 
 // ---------- designators ----------
-export function nextRef(sheets, prefix) {
+// Sheets sharing a designation prefix (sheet.refPrefix, e.g. "=MDB2") number their parts together; other prefixes start again at 1.
+export const scopeOf = (sheet) => String(sheet?.refPrefix ?? '');
+export const peers = (sheets, sheet) => (sheet ? [...sheets.filter((s) => s !== sheet && s.id !== sheet.id), sheet].filter((s) => scopeOf(s) === scopeOf(sheet)) : sheets);
+// The full designation: "=MDB2-Q1" on a sheet with refPrefix "=MDB2", plain "Q1" otherwise.
+export const fullRef = (sheet, ref) => (scopeOf(sheet) ? `${scopeOf(sheet)}${String(ref).startsWith('-') ? '' : '-'}${ref}` : String(ref));
+export function nextRef(sheets, prefix, sheet) {
   let n = 0;
   const re = new RegExp(`^-?${prefix}(\\d+)$`);
-  for (const sh of sheets) for (const p of sh.parts) { const m = re.exec(p.ref || ''); if (m) n = Math.max(n, +m[1]); }
+  for (const sh of peers(sheets, sheet)) for (const p of sh.parts) { const m = re.exec(p.ref || ''); if (m) n = Math.max(n, +m[1]); }
   return `${prefix}${n + 1}`;
 }
+const isDevice = (p) => { const y = symbolOf(p); return !y.power && !y.contact; };
+const refTaken = (sheets, sheet, ref) => peers(sheets, sheet).some((s) => s.parts.some((p) => p.ref === ref && isDevice(p)));
 
 // ---------- editing ----------
 // Moves parts by (dx, dy), dragging the wire vertices that sat on their pins (and keeping the next segment orthogonal).
@@ -337,7 +460,7 @@ export function duplicate(sheet, ids, dx, dy, sheets = [sheet]) {
   const set = new Set(ids), out = [];
   for (const p of sheet.parts.filter((x) => set.has(x.id))) {
     const sym = symbolOf(p);
-    const n = { ...structuredClone(p), id: newId(sheet, 'p'), x: p.x + dx, y: p.y + dy, ref: sym.power || sym.contact ? p.ref : nextRef([...sheets, sheet], sym.prefix) };
+    const n = { ...structuredClone(p), id: newId(sheet, 'p'), x: p.x + dx, y: p.y + dy, ref: sym.power || sym.contact ? p.ref : nextRef(sheets, sym.prefix, sheet) };
     sheet.parts.push(n); out.push(n.id);
   }
   for (const w of sheet.wires.filter((x) => set.has(x.id))) { const n = { ...structuredClone(w), id: newId(sheet, 'w'), pts: w.pts.map(([x, y]) => [x + dx, y + dy]) }; sheet.wires.push(n); out.push(n.id); }
@@ -402,6 +525,18 @@ const findItem = (sheet, ref) => {
 const onGrid = (v, what) => { const n = Number(v); if (!Number.isFinite(n)) throw new Error(`${what} must be a number`); return snap(n); };
 const ROT = (r) => { const n = ((Math.round(Number(r || 0) / 90) * 90) % 360 + 360) % 360; return n; };
 
+// One copy of an array's sub-op: points shifted by (dx, dy), "{i}" in strings -> the copy number, "$j" -> what sub-op j of this copy added.
+function shiftOp(o, dx, dy, n, made) {
+  const str = (v) => (typeof v === 'string' ? v.replace(/\{i\}/g, n).replace(/\$(\d+)/g, (m, j) => made[j] ?? m) : v);
+  const pt = (q) => (Array.isArray(q) ? [q[0] + dx, q[1] + dy] : str(q));
+  const out = Object.fromEntries(Object.entries(o).map(([k, v]) => [k, str(v)]));
+  if (o.x != null) out.x = Number(o.x) + dx;
+  if (o.y != null) out.y = Number(o.y) + dy;
+  for (const k of ['pts', 'via']) if (o[k]) out[k] = o[k].map(pt);
+  for (const k of ['from', 'to']) if (o[k] != null) out[k] = pt(o[k]);
+  if (o.props) out.props = Object.fromEntries(Object.entries(o.props).map(([k, v]) => [k, str(v)]));
+  return out;
+}
 // Applies edit ops to a sheet in place. sheets: all sheets (for designators). Returns { added: [ids], errors, warnings }.
 // Ops: add {sym, ref?, x, y, rot?, mirror?, props?} | update {id|ref, x?, y?, rot?, mirror?, ref?, props?} (props merge; null deletes a prop)
 // | delete {id|ref} | wire {pts, kind?} | connect {from, to, via?, kind?} | label {text, x, y, kind?} | sheet {name?, size?, title?}
@@ -409,13 +544,32 @@ export function applyOps(sheet, ops, sheets = [sheet]) {
   const res = { added: [], errors: [], warnings: [] };
   ops.forEach((o, i) => {
     try {
-      if (o.op === 'add') {
+      if (o.op === 'array') {
+        const count = Math.min(200, Math.max(0, parseInt(o.count, 10) || 0)), dx = Number(o.dx) || 0, dy = Number(o.dy) || 0, start = parseInt(o.start ?? 1, 10);
+        if (!count || !Array.isArray(o.ops)) throw new Error('array needs count and ops');
+        for (let k = 0; k < count; k++) {
+          const made = [];
+          o.ops.forEach((sub, j) => {
+            const r = applyOps(sheet, [shiftOp(sub, k * dx, k * dy, k + start, made)], sheets);
+            made[j] = r.added[0]?.split('=').at(-1);
+            res.added.push(...r.added);
+            r.errors.forEach((e) => res.errors.push(`op ${i} (array #${k + start}) ${e}`));
+            r.warnings.forEach((e) => res.warnings.push(`op ${i} (array #${k + start}) ${e}`));
+          });
+        }
+      } else if (o.op === 'add') {
         const sym = S[o.sym];
         if (!sym) throw new Error(`unknown symbol "${o.sym}"; call list_symbols`);
         const props = { ...(sym.props || {}), ...(sym.value != null ? { value: sym.value } : {}), ...(sym.power ? { net: sym.power } : {}), ...(o.props || {}) };
-        const ref = o.ref || (sym.power ? props.net : nextRef(sheets, sym.prefix));
+        let ref = o.ref ? String(o.ref) : sym.power ? props.net : nextRef(sheets, sym.prefix, sheet);
+        // a device designator is unique within its prefix scope: a taken one is renumbered rather than duplicated
+        if (o.ref && !sym.power && !sym.contact && refTaken(sheets, sheet, ref)) {
+          const m = /^(-?)([A-Z]+)\d*$/i.exec(ref);
+          const fresh = m ? m[1] + nextRef(sheets, m[2], sheet) : nextRef(sheets, sym.prefix, sheet);
+          res.warnings.push(`op ${i}: ${ref} is taken${scopeOf(sheet) ? ` in ${scopeOf(sheet)}` : ''}, used ${fresh} (set the sheet's refPrefix to number each board on its own)`);
+          ref = fresh;
+        }
         const part = { id: newId(sheet, 'p'), ref, sym: o.sym, x: onGrid(o.x, 'x'), y: onGrid(o.y, 'y'), rot: ROT(o.rot), mirror: !!o.mirror, props };
-        if (!sym.power && !sym.contact && sheets.some((s) => s.parts.some((p) => p.ref === ref && !symbolOf(p).contact))) res.warnings.push(`op ${i}: ${ref} already exists`);
         sheet.parts.push(part); res.added.push(`${part.id}=${ref}`);
       } else if (o.op === 'update') {
         const [kind, it] = findItem(sheet, o.id ?? o.ref);
@@ -429,8 +583,10 @@ export function applyOps(sheet, ops, sheets = [sheet]) {
         } else if (kind === 'wires') {
           if (o.pts) it.pts = simplify(o.pts.map(([x, y]) => [onGrid(x, 'x'), onGrid(y, 'y')]));
           if (o.kind !== undefined) { if (o.kind) it.kind = o.kind; else delete it.kind; }
+          if (o.label !== undefined) { if (o.label) it.label = String(o.label); else delete it.label; }
         } else {
-          for (const k of ['text', 'kind']) if (o[k] != null) it[k] = o[k];
+          for (const k of ['text', 'kind', 'rows', 'cols', 'auto', 'dash']) if (o[k] != null) it[k] = o[k];
+          for (const k of ['w', 'h']) if (o[k] != null) it[k] = onGrid(o[k], k);
           if (o.x != null) it.x = onGrid(o.x, 'x');
           if (o.y != null) it.y = onGrid(o.y, 'y');
         }
@@ -440,7 +596,7 @@ export function applyOps(sheet, ops, sheets = [sheet]) {
       } else if (o.op === 'wire') {
         if (!Array.isArray(o.pts) || o.pts.length < 2) throw new Error('wire needs pts: [[x,y], [x,y], ...]');
         const pts = simplify(o.pts.map(([x, y]) => [onGrid(x, 'x'), onGrid(y, 'y')]));
-        const w = { id: newId(sheet, 'w'), pts, ...(o.kind ? { kind: o.kind } : {}) };
+        const w = { id: newId(sheet, 'w'), pts, ...(o.kind ? { kind: o.kind } : {}), ...(o.label ? { label: String(o.label) } : {}) };
         sheet.wires.push(w); res.added.push(w.id);
         if (pts.some((p, j) => j && p[0] !== pts[j - 1][0] && p[1] !== pts[j - 1][1])) res.warnings.push(`op ${i}: ${w.id} has a diagonal segment`);
       } else if (o.op === 'connect') {
@@ -448,6 +604,15 @@ export function applyOps(sheet, ops, sheets = [sheet]) {
         const via = (o.via || []).map(([x, y]) => [onGrid(x, 'x'), onGrid(y, 'y')]);
         const w = { id: newId(sheet, 'w'), pts: route([a.x, a.y], [b.x, b.y], a.dir, b.dir, via), ...(o.kind ? { kind: o.kind } : {}) };
         sheet.wires.push(w); res.added.push(w.id);
+      } else if (o.op === 'rect') { // board enclosure / frame: dashed unless dash:false, label drawn at the top left
+        const l = { id: newId(sheet, 'l'), kind: 'rect', text: String(o.text ?? o.label ?? ''), x: onGrid(o.x, 'x'), y: onGrid(o.y, 'y'), w: onGrid(o.w, 'w'), h: onGrid(o.h, 'h'), dash: o.dash !== false };
+        if (l.w <= 0 || l.h <= 0) throw new Error('rect needs w and h > 0');
+        sheet.labels.push(l); res.added.push(l.id);
+      } else if (o.op === 'table') { // auto:"circuits" lists this sheet's circuits; or cols + rows of cells
+        const l = { id: newId(sheet, 'l'), kind: 'table', text: String(o.text ?? o.title ?? ''), x: onGrid(o.x, 'x'), y: onGrid(o.y, 'y') };
+        if (o.auto) { if (o.auto !== 'circuits') throw new Error('auto must be "circuits"'); l.auto = 'circuits'; }
+        else { if (!Array.isArray(o.rows)) throw new Error('table needs rows: [[cell, ...], ...] (or auto: "circuits")'); l.cols = (o.cols || []).map(String); l.rows = o.rows.map((r) => r.map((c) => String(c ?? ''))); }
+        sheet.labels.push(l); res.added.push(l.id);
       } else if (o.op === 'label') {
         const l = { id: newId(sheet, 'l'), kind: o.kind === 'text' ? 'text' : 'net', text: String(o.text ?? ''), x: onGrid(o.x, 'x'), y: onGrid(o.y, 'y') };
         if (!l.text) throw new Error('label needs text');
@@ -456,6 +621,7 @@ export function applyOps(sheet, ops, sheets = [sheet]) {
         if (o.name) sheet.name = String(o.name);
         if (o.size) { if (!SIZES[o.size]) throw new Error(`size must be one of ${Object.keys(SIZES).join(', ')}`); sheet.size = o.size; }
         if (o.title) sheet.title = { ...sheet.title, ...o.title };
+        if (o.refPrefix != null) { if (o.refPrefix) sheet.refPrefix = String(o.refPrefix); else delete sheet.refPrefix; }
       } else throw new Error(`unknown op "${o.op}"`);
     } catch (e) { res.errors.push(`op ${i} (${o.op}): ${e.message}`); }
   });
@@ -473,10 +639,12 @@ export function describe(sheet, sheets = [sheet]) {
       id: p.id, ref: p.ref, sym: p.sym, x: p.x, y: p.y, ...(p.rot ? { rot: p.rot } : {}), ...(p.mirror ? { mirror: true } : {}), props: p.props,
       zone: zoneOf(sheet, p.x, p.y), bbox: bboxOf(p),
       pins: Object.fromEntries(pinsOf(p).map((q) => [q.name, { at: [q.x, q.y], net: netAt(q.x, q.y) }])),
-      ...(symbolOf(p).contact && xr[p.ref]?.device ? { coilAt: xr[p.ref].device.loc } : {}),
+      ...(symbolOf(p).contact && xr[fullRef(sheet, p.ref)]?.device ? { coilAt: xr[fullRef(sheet, p.ref)].device.loc } : {}),
     })),
-    wires: sheet.wires.map((w) => ({ id: w.id, pts: w.pts, net: netAt(...w.pts[0]), ...(w.kind ? { kind: w.kind } : {}) })),
-    labels: sheet.labels,
+    wires: sheet.wires.map((w) => ({ id: w.id, pts: w.pts, net: netAt(...w.pts[0]), ...(w.kind ? { kind: w.kind } : {}), ...(w.label ? { label: w.label } : {}) })),
+    labels: sheet.labels.map((l) => ({ ...l, bbox: labelBox(l, sheet) })),
+    ...(sheet.refPrefix ? { refPrefix: sheet.refPrefix } : {}),
+    ...(phaseLoads(sheet) ? { phaseLoads: Object.fromEntries(Object.entries(phaseLoads(sheet)).map(([k, v]) => [k, kw(v)])) } : {}),
     nets: nets.map((n) => ({ name: n.name, nodes: n.nodes })),
     issues: check(sheet, sheets),
   };
@@ -487,6 +655,82 @@ export const LIGHT = { bg: '#ffffff', ink: '#1d2330', wire: '#1f4fbf', bus: '#1f
 export const DARK = { bg: '#14161c', ink: '#d9dde6', wire: '#6f9bff', bus: '#6f9bff', text: '#d9dde6', muted: '#858c9c', frame: '#5b6272', pin: '#ef6b62', junction: '#6f9bff', grid: '#22252e', label: '#4cc38a' };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const FONT = 'font-family="DejaVu Sans, Arial, Helvetica, sans-serif"';
+
+// ---------- text: units and right-to-left scripts ----------
+// "2.5mm2" -> "2.5mm²", "10kohm" -> "10kΩ" (display only; the stored value keeps what was typed)
+export const units = (v) => String(v ?? '').replace(/(\d)\s*mm2\b/g, '$1mm²').replace(/(\d)\s*([kM]?)ohms?\b/gi, '$1$2Ω');
+const RTL = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+const MIRROR = { '(': ')', ')': '(', '[': ']', ']': '[', '{': '}', '}': '{', '<': '>', '>': '<' };
+// Text in visual (left-to-right display) order, a reduced Unicode bidi algorithm: the paragraph direction is that of the first
+// strong character; Hebrew/Arabic runs are reversed, Latin and digit runs inside them keep their order ("רשת 3x400/230V").
+// The rasteriser (resvg) does no bidi at all, so both it and the browser get this string with bidi-override.
+export function visual(s) {
+  s = String(s);
+  if (!RTL.test(s)) return s;
+  const ch = [...s];
+  const cls = ch.map((c) => (RTL.test(c) ? 'R' : /[\p{L}\p{N}]/u.test(c) ? 'L' : 'N'));
+  const rtl = (cls.find((c) => c !== 'N') || 'R') === 'R';
+  // bracket pairs (rule N0): both brackets take the paragraph direction if it occurs inside them (digits count as R),
+  // otherwise the direction inside when the text before the pair has that direction too
+  const open = [];
+  ch.forEach((c, i) => {
+    if ('([{'.includes(c)) open.push(i);
+    else if (')]}'.includes(c)) {
+      const o = open.findLastIndex((k) => ch[k] === { ')': '(', ']': '[', '}': '{' }[c]); if (o < 0) return;
+      const k = open[o]; open.length = o;
+      const inner = ch.slice(k + 1, i), e = rtl ? 'R' : 'L';
+      const has = (d) => inner.some((x) => (d === 'R' ? RTL.test(x) || /\p{N}/u.test(x) : /\p{L}/u.test(x) && !RTL.test(x)));
+      let d = null;
+      if (has(e)) d = e;
+      else if (has(e === 'R' ? 'L' : 'R')) { let before = e; for (let j = k - 1; j >= 0; j--) if (cls[j] !== 'N') { before = cls[j]; break; } d = before === e ? e : before; }
+      if (d) cls[k] = cls[i] = d;
+    }
+  });
+  const strong = (i, d) => { for (let j = i + d; j >= 0 && j < ch.length; j += d) if (cls[j] !== 'N') return cls[j]; return rtl ? 'R' : 'L'; };
+  const lvl = cls.map((c, i) => { const k = c === 'N' ? (strong(i, -1) === strong(i, 1) ? strong(i, -1) : rtl ? 'R' : 'L') : c; return rtl ? (k === 'R' ? 1 : 2) : (k === 'R' ? 1 : 0); });
+  const out = ch.map((c, i) => (lvl[i] % 2 && MIRROR[c] ? MIRROR[c] : c));
+  for (let L = Math.max(...lvl); L >= 1; L--) {
+    for (let i = 0; i < out.length;) {
+      if (lvl[i] < L) { i++; continue; }
+      let j = i; while (j < out.length && lvl[j] >= L) j++;
+      out.splice(i, j - i, ...out.slice(i, j).reverse()); lvl.splice(i, j - i, ...lvl.slice(i, j).reverse());
+      i = j;
+    }
+  }
+  return out.join('');
+}
+// One <text>: escaped, units shown, RTL put in visual order. attrs: extra attributes (fill, text-anchor...).
+const T = (x, y, str, size, attrs = '') => {
+  const t = units(str), v = visual(t);
+  // LRO ... PDF inside the text too: resvg ignores the unicode-bidi attribute but honours the control characters
+  return `<text x="${x}" y="${y}" ${FONT} font-size="${size}" ${attrs}${v !== t ? ' direction="ltr" unicode-bidi="bidi-override"' : ''}>${v !== t ? `\u202D${esc(v)}\u202C` : esc(v)}</text>`;
+};
+
+// The text beside a part: power symbols show their net; others ref + value (right of the part, or below with props.labelPos
+// "below", left with "left"), and a circuit block (circuit · phase, cable length) beside the outgoing pin.
+export function partTexts(p) {
+  const sym = symbolOf(p), pr = p.props || {};
+  const [x1, y1, x2, y2] = bboxOf(p);
+  if (sym.power) {
+    const [nx, ny] = sym.netText ? xform(p, sym.netText) : [x2 + 4, (y1 + y2) / 2];
+    return [{ x: nx, y: ny, text: pr.net || sym.power, size: 10, bold: true, power: true, anchor: sym.netText ? 'middle' : 'start' }];
+  }
+  const out = [];
+  const lines = [p.ref, pr.value].filter((v) => v != null && v !== '');
+  const pos = pr.labelPos;
+  if (pos === 'below') lines.forEach((t, i) => out.push({ x: (x1 + x2) / 2, y: y2 + 9 + i * 12, text: t, size: i ? 9 : 10, bold: !i, muted: !!i, anchor: 'middle' }));
+  else {
+    const top = (y1 + y2) / 2 - (lines.length - 1) * 6;
+    lines.forEach((t, i) => out.push({ x: pos === 'left' ? x1 - 6 : x2 + 6, y: top + i * 12, text: t, size: i ? 9 : 10, bold: !i, muted: !!i, anchor: pos === 'left' ? 'end' : 'start' }));
+  }
+  const block = [[pr.circuit, pr.phase].filter(Boolean).join(' · '), [pr.cable, pr.length ? `${pr.length}${/^[\d.]+$/.test(pr.length) ? 'm' : ''}` : ''].filter(Boolean).join(' ')].filter(Boolean);
+  if (block.length) {
+    const pins = pinsOf(p), q = pins.reduce((a, b) => (b.y >= a.y ? b : a), pins[0]);
+    const y0 = (pos === 'below' ? y2 + 9 + lines.length * 12 : q.y + 10);
+    block.forEach((t, i) => out.push({ x: q.x + 5, y: y0 + i * 10, text: t, size: 8, muted: true, anchor: 'start' }));
+  }
+  return out;
+}
 
 // One part: symbol shapes (rotated), upright inner text, then ref/value beside it.
 export function partSvg(p, c = LIGHT, { pins: showPins = false, connected } = {}) {
@@ -505,27 +749,65 @@ export function partSvg(p, c = LIGHT, { pins: showPins = false, connected } = {}
     if (anchor !== 'middle' && (p.mirror ? !(p.rot % 180) : false)) anchor = anchor === 'start' ? 'end' : 'start';
     if (anchor !== 'middle' && p.rot % 180) anchor = 'middle';
     if (anchor !== 'middle' && p.rot === 180) anchor = anchor === 'start' ? 'end' : 'start';
-    g += `<text x="${x}" y="${y}" ${FONT} font-size="${s.t[3] || 10}" fill="${c.ink}" text-anchor="${anchor}" dominant-baseline="central">${esc(t)}</text>`;
+    g += T(x, y, t, s.t[3] || 10, `fill="${c.ink}" text-anchor="${anchor}" dominant-baseline="central"`);
   }
-  const [, y1, x2, y2] = bboxOf(p);
-  if (sym.power) {
-    const [nx, ny] = sym.netText ? xform(p, sym.netText) : [x2 + 4, (y1 + y2) / 2];
-    g += `<text x="${nx}" y="${ny}" ${FONT} font-size="10" font-weight="600" fill="${c.ink}" text-anchor="${sym.netText ? 'middle' : 'start'}" dominant-baseline="central">${esc(p.props?.net || sym.power)}</text>`;
-  } else {
-    const lines = [p.ref, p.props?.value].filter((v) => v != null && v !== '');
-    const top = (y1 + y2) / 2 - (lines.length - 1) * 6;
-    lines.forEach((t, i) => { g += `<text x="${x2 + 6}" y="${top + i * 12}" ${FONT} font-size="${i ? 9 : 10}" ${i ? '' : 'font-weight="600"'} fill="${i ? c.muted : c.text}" dominant-baseline="central">${esc(t)}</text>`; });
-  }
+  for (const t of partTexts(p)) g += T(t.x, t.y, t.text, t.size, `${t.bold ? 'font-weight="600" ' : ''}fill="${t.power ? c.ink : t.muted ? c.muted : c.text}" text-anchor="${t.anchor}" dominant-baseline="central"`);
   if (showPins) for (const q of pinsOf(p)) if (!connected?.has(key(q.x, q.y))) g += `<circle cx="${q.x}" cy="${q.y}" r="2" fill="none" stroke="${c.pin}" stroke-width="1"/>`;
   return g;
 }
 
-export const wireSvg = (w, c = LIGHT) => `<polyline points="${w.pts.map((p) => p.join(',')).join(' ')}" fill="none" stroke="${w.kind === 'bus' ? c.bus : c.wire}" stroke-width="${w.kind === 'bus' ? 5 : 1.6}" stroke-linecap="square" stroke-linejoin="miter"/>`;
+// A wire; a labelled one (busbars: "L1 L2 L3 N 400V") carries its label past the right/bottom end.
+export function wireSvg(w, c = LIGHT) {
+  let g = `<polyline points="${w.pts.map((p) => p.join(',')).join(' ')}" fill="none" stroke="${w.kind === 'bus' ? c.bus : c.wire}" stroke-width="${w.kind === 'bus' ? 5 : 1.6}" stroke-linecap="square" stroke-linejoin="miter"/>`;
+  if (w.label) { const [x, y, at] = wireLabelAt(w); g += T(x, y, w.label, 10, `font-weight="600" fill="${c.text}" text-anchor="${at}" dominant-baseline="central"`); }
+  return g;
+}
+// Where a wire's label goes: after the end that lies furthest right (or down, for a vertical end segment).
+function wireLabelAt(w) {
+  const a = w.pts[0], b = w.pts.at(-1), [e, n] = b[0] > a[0] || (b[0] === a[0] && b[1] >= a[1]) ? [b, w.pts.at(-2)] : [a, w.pts[1]];
+  return e[1] === n[1] ? [e[0] + (e[0] >= n[0] ? 8 : -8), e[1], e[0] >= n[0] ? 'start' : 'end'] : [e[0], e[1] + (e[1] >= n[1] ? 10 : -10), 'middle'];
+}
 
-export function labelSvg(l, c = LIGHT) {
-  if (l.kind === 'text') return `<text x="${l.x}" y="${l.y}" ${FONT} font-size="11" fill="${c.text}" dominant-baseline="central">${esc(l.text)}</text>`;
+// Labels: net labels, free text, board rectangles (kind "rect") and tables (kind "table"). sheet: for auto tables.
+export function labelSvg(l, c = LIGHT, sheet) {
+  if (l.kind === 'text') return T(l.x, l.y, l.text, 11, `fill="${c.text}" dominant-baseline="central"`);
+  if (l.kind === 'rect') return `<g><rect x="${l.x}" y="${l.y}" width="${l.w}" height="${l.h}" fill="none" stroke="${c.ink}" stroke-width="1.4"${l.dash !== false ? ' stroke-dasharray="10 5"' : ''}/>${l.text ? T(l.x + 8, l.y + 13, l.text, 11, `font-weight="600" fill="${c.text}" dominant-baseline="central"`) : ''}</g>`;
+  if (l.kind === 'table') return tableSvg(l, c, sheet);
   const w = Math.max(20, l.text.length * 6.6 + 10);
-  return `<g><path d="M${l.x} ${l.y}l6 -8h${w}v16h${-w}z" fill="${c.bg}" stroke="${c.label}" stroke-width="1.2"/><text x="${l.x + 10}" y="${l.y + 0.5}" ${FONT} font-size="10" font-weight="600" fill="${c.label}" dominant-baseline="central">${esc(l.text)}</text></g>`;
+  return `<g><path d="M${l.x} ${l.y}l6 -8h${w}v16h${-w}z" fill="${c.bg}" stroke="${c.label}" stroke-width="1.2"/>${T(l.x + 10, l.y + 0.5, l.text, 10, `font-weight="600" fill="${c.label}" dominant-baseline="central"`)}</g>`;
+}
+// A table's cells: auto "circuits" builds them from the sheet's circuit props.
+function tableCells(l, sheet) {
+  if (l.auto === 'circuits') { const rows = sheet ? circuits([sheet]) : []; const cols = CIRCUIT_COLS.filter(([k]) => rows.some((r) => r[k])); return { cols: cols.map((x) => x[1]), rows: rows.map((r) => cols.map(([k]) => r[k])) }; }
+  return { cols: l.cols || [], rows: l.rows || [] };
+}
+const ROW = 16;
+function tableLayout(l, sheet) {
+  const { cols, rows } = tableCells(l, sheet);
+  const n = Math.max(cols.length, ...rows.map((r) => r.length), 1);
+  const ws = Array.from({ length: n }, (_, i) => Math.max(30, ...[cols[i] ?? '', ...rows.map((r) => r[i] ?? '')].map((v) => units(v).length * 5.8 + 10)));
+  const head = (l.text ? ROW : 0) + (cols.length ? ROW : 0);
+  return { cols, rows, ws, W: ws.reduce((a, b) => a + b, 0), H: head + Math.max(1, rows.length) * ROW, head };
+}
+function tableSvg(l, c, sheet) {
+  const { cols, rows, ws, W, H, head } = tableLayout(l, sheet);
+  const xs = ws.reduce((a, w) => [...a, a.at(-1) + w], [l.x]);
+  let g = `<g><rect x="${l.x}" y="${l.y}" width="${W}" height="${H}" fill="${c.bg}" stroke="${c.frame}"/>`;
+  let y = l.y;
+  if (l.text) { g += T(l.x + 5, y + ROW / 2, l.text, 10, `font-weight="600" fill="${c.text}" dominant-baseline="central"`); y += ROW; g += `<path d="M${l.x} ${y}H${l.x + W}" stroke="${c.frame}"/>`; }
+  const row = (cells, yy, bold) => cells.map((v, i) => T(xs[i] + 5, yy + ROW / 2, v ?? '', 9, `${bold ? 'font-weight="600" ' : ''}fill="${bold ? c.muted : c.text}" dominant-baseline="central"`)).join('');
+  if (cols.length) { g += row(cols, y, true); y += ROW; }
+  rows.forEach((r, i) => { g += `<path d="M${l.x} ${y + i * ROW}H${l.x + W}" stroke="${c.frame}" stroke-width="${i ? 0.5 : 1}"/>` + row(r, y + i * ROW); });
+  if (!rows.length) g += T(l.x + 5, y + ROW / 2, l.auto ? 'no circuits yet: set circuit / cable / phase on the breakers' : '(empty)', 9, `fill="${c.muted}" dominant-baseline="central"`);
+  g += xs.slice(1, -1).map((x) => `<path d="M${x} ${l.y + (l.text ? ROW : 0)}V${l.y + H}" stroke="${c.frame}" stroke-width="0.5"/>`).join('');
+  return g + '</g>';
+}
+// Box of a label, for selection.
+export function labelBox(l, sheet) {
+  if (l.kind === 'net') return [l.x, l.y - 8, l.x + Math.max(20, l.text.length * 6.6 + 10) + 6, l.y + 8];
+  if (l.kind === 'rect') return [l.x, l.y, l.x + l.w, l.y + l.h];
+  if (l.kind === 'table') { const t = tableLayout(l, sheet); return [l.x, l.y, l.x + t.W, l.y + t.H]; }
+  return [l.x, l.y - 7, l.x + l.text.length * 6.2, l.y + 7];
 }
 
 // Frame with zone numbers/letters and a title block in the bottom right.
@@ -539,8 +821,9 @@ export function frameSvg(sheet, c = LIGHT, project = {}) {
   for (let i = 0; i * ZONE < H; i++) { const y = Math.min(i * ZONE + ZONE / 2, H - m - 6); const L = String.fromCharCode(65 + i); g += `<text x="${m - 6}" y="${y}" ${FONT} font-size="9" fill="${c.muted}" text-anchor="middle" dominant-baseline="central">${L}</text><text x="${W - m + 6}" y="${y}" ${FONT} font-size="9" fill="${c.muted}" text-anchor="middle" dominant-baseline="central">${L}</text>`; }
   const t = { ...project, ...sheet.title };
   const bw = 360, bh = 80, bx = W - m - bw, by = H - m - bh;
-  const cell = (x, y, w, h, label, val, big) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${c.bg}" stroke="${c.frame}"/><text x="${x + 4}" y="${y + 9}" ${FONT} font-size="7" fill="${c.muted}">${label}</text><text x="${x + 4}" y="${y + h - 6}" ${FONT} font-size="${big ? 13 : 10}" ${big ? 'font-weight="600"' : ''} fill="${c.text}">${esc(val ?? '')}</text>`;
-  g += cell(bx, by, bw, 40, 'TITLE', t.title || sheet.name, true);
+  const cell = (x, y, w, h, label, val, big) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${c.bg}" stroke="${c.frame}"/><text x="${x + 4}" y="${y + 9}" ${FONT} font-size="7" fill="${c.muted}">${label}</text>` + T(x + 4, y + h - 6, val ?? '', big ? 13 : 10, `${big ? 'font-weight="600" ' : ''}fill="${c.text}"`);
+  if (sheet.refPrefix) g += cell(bx, by, bw - 90, 40, 'TITLE', t.title || sheet.name, true) + cell(bx + bw - 90, by, 90, 40, 'LOCATION', sheet.refPrefix, true);
+  else g += cell(bx, by, bw, 40, 'TITLE', t.title || sheet.name, true);
   g += cell(bx, by + 40, 120, 40, 'DRAWING NO.', t.drawingNo) + cell(bx + 120, by + 40, 60, 40, 'REV', t.rev) + cell(bx + 180, by + 40, 90, 40, 'DRAWN', t.author) + cell(bx + 270, by + 40, 90, 40, 'SHEET', `${sheet.id}${t.of ? ' / ' + t.of : ''}`);
   return g;
 }
@@ -550,7 +833,7 @@ export function crossRefSvg(sheet, sheets, c = LIGHT) {
   const xr = crossRefs(sheets);
   let g = '';
   for (const p of sheet.parts) {
-    const sym = symbolOf(p), r = xr[p.ref];
+    const sym = symbolOf(p), r = xr[fullRef(sheet, p.ref)];
     if (!r || sym.power) continue;
     const [, , x2, y2] = bboxOf(p);
     if (sym.contact && r.device) g += `<text x="${x2 + 6}" y="${p.y + 18}" ${FONT} font-size="8" fill="${c.muted}">→ ${esc(r.device.loc)}</text>`;
@@ -564,7 +847,7 @@ export function sheetSvg(sheet, sheets = [sheet], c = LIGHT, project = {}) {
   const [W, H] = SIZES[sheet.size] || SIZES.A3;
   const { junctions } = connectivity(sheet);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` + frameSvg(sheet, c, project)
-    + sheet.wires.map((w) => wireSvg(w, c)).join('') + sheet.parts.map((p) => partSvg(p, c)).join('') + sheet.labels.map((l) => labelSvg(l, c)).join('')
+    + sheet.wires.map((w) => wireSvg(w, c)).join('') + sheet.parts.map((p) => partSvg(p, c)).join('') + sheet.labels.map((l) => labelSvg(l, c, sheet)).join('')
     + junctions.map(([x, y]) => `<circle cx="${x}" cy="${y}" r="3.2" fill="${c.junction}"/>`).join('') + crossRefSvg(sheet, sheets, c) + '</svg>';
 }
 

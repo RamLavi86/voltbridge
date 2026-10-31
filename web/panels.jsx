@@ -37,11 +37,11 @@ export function Palette({ tool, setTool, theme }) {
 }
 
 // ---------- toolbar ----------
-const TOOLS = [['select', 'Select', 'V'], ['wire', 'Wire', 'W'], ['bus', 'Busbar', 'B'], ['net', 'Net label', 'N'], ['text', 'Text', 'T']];
+const TOOLS = [['select', 'Select', 'V'], ['wire', 'Wire', 'W'], ['bus', 'Busbar', 'B'], ['net', 'Net label', 'N'], ['text', 'Text', 'T'], ['rect', 'Board frame', 'E'], ['table', 'Circuit table', '']];
 export function Toolbar({ tool, setTool, hasSel, act, canUndo, canRedo }) {
   return (
     <div className="toolbar">
-      <div className="seg tools">{TOOLS.map(([k, n, key]) => <button key={k} className={tool === k ? 'on' : ''} onClick={() => setTool(k)} title={`${n} (${key})`}>{n}</button>)}</div>
+      <div className="seg tools">{TOOLS.map(([k, n, key]) => <button key={k} className={tool === k ? 'on' : ''} onClick={() => setTool(k)} title={key ? `${n} (${key})` : n}>{n}</button>)}</div>
       {tool.startsWith('place:') && <span className="placing">Placing {sch.SYMBOLS[tool.slice(6)]?.name}: click to place, R rotate, Esc stop</span>}
       <span className="tsep" />
       <button className="ghost" disabled={!hasSel} onClick={() => act('rotate')} title="Rotate 90° (R, Shift+R back)">Rotate</button>
@@ -87,7 +87,7 @@ export function Inspector({ doc, sheets, sel, setSel, edit, project, setProject,
     const sym = sch.symbolOf(part);
     const fixed = new Set(['value', 'partNo', 'maker', 'description', 'net']);
     const extra = Object.keys(part.props || {}).filter((k) => !fixed.has(k));
-    const r = xr[part.ref];
+    const r = xr[sch.fullRef(doc, part.ref)];
     return (
       <div className="inspector">
         <div className="ihead"><span className="kdot" /><b>{part.ref}</b><span className="muted">{sym.name}</span></div>
@@ -135,6 +135,7 @@ export function Inspector({ doc, sheets, sel, setSel, edit, project, setProject,
     return (
       <div className="inspector">
         <div className="ihead"><b>{wire.kind === 'bus' ? 'Busbar' : 'Wire'}</b><span className="muted">{wire.id}</span></div>
+        <Field label="Label (e.g. L1 L2 L3 N)" value={wire.label} onSave={(v) => upd(wire.id, (x) => { if (v.trim()) x.label = v.trim(); else delete x.label; })} />
         <label className="icheck"><input type="checkbox" checked={wire.kind === 'bus'} onChange={(e) => upd(wire.id, (x) => { if (e.target.checked) x.kind = 'bus'; else delete x.kind; })} /> Busbar (thick)</label>
         <div className="isec">Net {net}</div>
         {n?.nodes.map((x) => <div key={x} className="irel"><span className="mono">{x}</span></div>)}
@@ -146,9 +147,15 @@ export function Inspector({ doc, sheets, sel, setSel, edit, project, setProject,
   if (label) {
     return (
       <div className="inspector">
-        <div className="ihead"><b>{label.kind === 'net' ? 'Net label' : 'Text'}</b></div>
-        <Field label="Text" value={label.text} onSave={(v) => upd(label.id, (x) => { x.text = v; })} />
-        <label className="ifield">Kind<select value={label.kind} onChange={(e) => upd(label.id, (x) => { x.kind = e.target.value; })}><option value="net">Net label (names the net)</option><option value="text">Free text</option></select></label>
+        <div className="ihead"><b>{{ net: 'Net label', rect: 'Board frame', table: 'Table' }[label.kind] || 'Text'}</b></div>
+        <Field label={label.kind === 'net' || label.kind === 'text' ? 'Text' : 'Title'} value={label.text} onSave={(v) => upd(label.id, (x) => { x.text = v; })} />
+        {label.kind === 'rect' && <>
+          <Field label="Width" value={label.w} onSave={(v) => upd(label.id, (x) => { x.w = Math.max(20, sch.snap(+v || x.w)); })} />
+          <Field label="Height" value={label.h} onSave={(v) => upd(label.id, (x) => { x.h = Math.max(20, sch.snap(+v || x.h)); })} />
+          <label className="icheck"><input type="checkbox" checked={label.dash !== false} onChange={(e) => upd(label.id, (x) => { x.dash = e.target.checked; })} /> Dashed</label>
+        </>}
+        {label.kind === 'table' && <p className="muted small">{label.auto ? 'Lists the circuits on this sheet: set circuit, cable, length, phase, power (and load) props on the outgoing breakers.' : 'A table Claude filled in; ask Claude to change its rows.'}</p>}
+        {(label.kind === 'net' || label.kind === 'text') && <label className="ifield">Kind<select value={label.kind} onChange={(e) => upd(label.id, (x) => { x.kind = e.target.value; })}><option value="net">Net label (names the net)</option><option value="text">Free text</option></select></label>}
         <button className="danger" onClick={() => { edit((d) => sch.removeItems(d, [label.id])); setSel(new Set()); }}><Icon n="trash" s={13} /> Delete</button>
       </div>
     );
@@ -166,6 +173,8 @@ export function Inspector({ doc, sheets, sel, setSel, edit, project, setProject,
     <div className="inspector">
       <div className="ihead"><b>Sheet {doc.id}</b></div>
       <Field label="Sheet name" value={doc.name} onSave={(v) => edit((d) => { d.name = v || d.name; })} />
+      <Field label="Designation prefix (e.g. =MDB2; parts number from 1 per prefix)" value={doc.refPrefix ?? ''} onSave={(v) => edit((d) => { if (v.trim()) d.refPrefix = v.trim(); else delete d.refPrefix; })} />
+      {sch.phaseLoads(doc) && <div className="irel"><span>Phase loads</span><span className="mono">{Object.entries(sch.phaseLoads(doc)).map(([k, w]) => `${k} ${(w / 1000).toFixed(1)}kW`).join('  ')}</span></div>}
       <label className="ifield">Size<select value={doc.size} onChange={(e) => edit((d) => { d.size = e.target.value; })}>{Object.entries(sch.SIZES).map(([k, [w, h]]) => <option key={k} value={k}>{k} landscape ({w}×{h})</option>)}</select></label>
       <div className="isec">Title block (this sheet)</div>
       {TITLE_FIELDS.map(([k, n]) => <Field key={k} label={n} value={doc.title?.[k] ?? ''} onSave={(v) => edit((d) => { d.title = { ...d.title, [k]: v }; if (!v) delete d.title[k]; })} />)}
@@ -207,11 +216,12 @@ export function ExportMenu({ doc, sheets, project, sessName, tx }) {
     else if (k === 'png') { const [w, h] = sch.SIZES[doc.size] || sch.SIZES.A3; download(`${fileName(doc)}.png`, await svgToPng(svg(), w, h), 'image/png'); }
     else if (k === 'pdf') printAll(sheets, project);
     else if (k === 'bom') download(`${sessName}-bom.csv`, sch.bomCsv(sheets), 'text/csv');
+    else if (k === 'circuits') download(`${sessName}-circuits.csv`, sch.circuitsCsv(sheets), 'text/csv');
     else if (k === 'netlist') download(`${sessName}-netlist.csv`, sch.netlistCsv(sheets), 'text/csv');
     else if (k === 'json') download(`${sessName}.voltbridge.json`, JSON.stringify({ project, sheets }, null, 1), 'application/json');
-    else if (k === 'server') for (const f of ['svg', 'png', 'bom', 'netlist']) tx({ t: 'export', format: f });
+    else if (k === 'server') for (const f of ['svg', 'png', 'bom', 'netlist', 'circuits']) tx({ t: 'export', format: f });
   };
-  const items = [['svg', 'This sheet as SVG'], ['png', 'This sheet as PNG'], ['pdf', 'All sheets: print / PDF'], null, ['bom', 'Bill of materials (CSV)'], ['netlist', 'Netlist (CSV)'], ['json', 'Project (JSON)'], null, ['server', 'Write all to the output folder']];
+  const items = [['svg', 'This sheet as SVG'], ['png', 'This sheet as PNG'], ['pdf', 'All sheets: print / PDF'], null, ['bom', 'Bill of materials (CSV)'], ['netlist', 'Netlist (CSV)'], ['circuits', 'Circuit schedule (CSV)'], ['json', 'Project (JSON)'], null, ['server', 'Write all to the output folder']];
   return (
     <div className="picker">
       <button className="ghost" onClick={() => setOpen(!open)} aria-expanded={open}><Icon n="export" s={14} /> Export <Icon n="chev" s={12} /></button>

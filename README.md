@@ -33,11 +33,13 @@ npm test               # model, tools, sessions; writes test-out/sheet*.png
 - **Sheets**: tabs (+ adds, double-click renames, drag reorders). Net labels and power symbols with the same name join nets across sheets.
 - **Export**: sheet SVG/PNG, print/PDF of all sheets, BOM CSV, netlist CSV, project JSON, or write everything into the output folder (`<cwd>/schematics`).
 
+**Distribution boards.** Multi-line 4-pole devices (`rcd_4p`, `rcbo`, `breaker_4p`, `switch_disconnector_4p`); on a single line, set `poles` ("3", "4", "3P+N") on breaker/fuse/disconnector/SPD/RCD to draw the IEC pole strokes (the RCD then becomes a 1-in/1-out symbol). Load symbols: socket (n-way), light, water heater, cooker, A/C, EV charger; N and PE bars; PV array, battery storage and hybrid inverter for single-line PV. Props `circuit`, `cable`, `length`, `phase`, `power`, `load` on an outgoing breaker draw a small block beside its line, feed the circuit table (Circuit table tool, or Claude's `table` op), the circuit schedule CSV, cable totals in the BOM, and a phase-imbalance check. Board frame tool (E) draws a dashed enclosure with its name. A sheet's designation prefix (e.g. `=MDB2`) numbers its parts from 1 again and shows `=MDB2-Q1` in BOM/netlist. Hebrew/Arabic text renders the same in the browser and in PNGs; `mm2` shows as mm².
+
 Coils and their contacts share a designator (K1 coil, K1 13-14 contact). Under each coil the drawing lists its contacts with their zones; each contact shows where its coil is.
 
 ## Claude's tools
 
-`list_sheets`, `list_symbols`, `get_sheet` (parts with absolute pins and nets, wires, labels, nets, issues), `edit_sheet` (add / connect / wire / label / update / delete / sheet ops in one batch), `new_sheet`, `delete_sheet`, `set_project`, `snapshot` (PNG via resvg, no browser needed), `get_netlist`, `get_bom`, `export`. The model lives on the server, so Claude can draw with no browser open; open windows update live, and Ctrl+Z undoes Claude's edits too.
+`list_sheets`, `list_symbols`, `get_sheet` (parts with absolute pins and nets, wires, labels, nets, issues), `edit_sheet` (add / connect / wire / label / rect / table / array / update / delete / sheet ops in one batch), `new_sheet`, `delete_sheet`, `set_project`, `snapshot` (PNG via resvg, no browser needed), `get_netlist`, `get_bom`, `export`. The model lives on the server, so Claude can draw with no browser open; open windows update live, and Ctrl+Z undoes Claude's edits too.
 
 ## Files
 
@@ -47,4 +49,4 @@ Coils and their contacts share a designator (K1 coil, K1 13-14 contact). Under e
 
 ## Not yet
 
-Terminal strips and cable lists, wire numbers, a PLC I/O symbol generator, multi-pole symbols beyond 3P/2P, DXF/DWG export, symbol editor, 3D/panel layout.
+Terminal strips, wire numbers, a PLC I/O symbol generator, a thermal overload relay, DXF/DWG export, symbol editor, 3D/panel layout.

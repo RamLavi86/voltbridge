@@ -12,11 +12,10 @@ function partMarkup(p, c, theme) {
   if (v == null) { v = sch.partSvg(p, c); if (svgCache.size > 4000) svgCache.clear(); svgCache.set(k, v); }
   return v;
 }
-const labelBox = (l) => (l.kind === 'net' ? [l.x, l.y - 8, l.x + Math.max(20, l.text.length * 6.6 + 10) + 6, l.y + 8] : [l.x, l.y - 7, l.x + l.text.length * 6.2, l.y + 7]);
 const wireBox = (w) => [Math.min(...w.pts.map((p) => p[0])), Math.min(...w.pts.map((p) => p[1])), Math.max(...w.pts.map((p) => p[0])), Math.max(...w.pts.map((p) => p[1]))];
 const hits = (a, b) => a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 const inside = (a, b) => a[0] >= b[0] && a[2] <= b[2] && a[1] >= b[1] && a[3] <= b[3];
-export const itemsIn = (doc) => [...doc.parts.map((p) => [p.id, sch.bboxOf(p)]), ...doc.wires.map((w) => [w.id, wireBox(w)]), ...doc.labels.map((l) => [l.id, labelBox(l)])];
+export const itemsIn = (doc) => [...doc.parts.map((p) => [p.id, sch.bboxOf(p)]), ...doc.wires.map((w) => [w.id, wireBox(w)]), ...doc.labels.map((l) => [l.id, sch.labelBox(l, doc)])];
 
 // Elbow from a to b: horizontal first, or vertical first when flip.
 const elbow = (a, b, flip) => (a[0] === b[0] || a[1] === b[1] ? [b] : flip ? [[a[0], b[1]], b] : [[b[0], a[1]], b]);
@@ -125,6 +124,8 @@ export function Editor({ doc, sheets, project, theme, tool, setTool, sel, setSel
       return;
     }
     if (tool === 'net' || tool === 'text') { placeLabel(tool, p); setTool('select'); return; }
+    if (tool === 'table') { commit((d) => { const r = sch.applyOps(d, [{ op: 'table', auto: 'circuits', x: p[0], y: p[1], text: 'Circuit schedule' }]); setSel(new Set(r.added)); }); setTool('select'); return; }
+    if (tool === 'rect') { drag.current = { kind: 'rect', start: p }; return; }
     const id = e.target.closest?.('[data-id]')?.dataset.id;
     if (id) {
       let next = sel;
@@ -151,11 +152,19 @@ export function Editor({ doc, sheets, project, theme, tool, setTool, sel, setSel
       if (dx === g.dx && dy === g.dy) return;
       g.dx = dx; g.dy = dy;
       const d = clone(doc); moveSel(d, g.ids, dx, dy); setPreview(d);
-    } else if (g.kind === 'box') setBox([Math.min(g.start[0], w[0]), Math.min(g.start[1], w[1]), Math.max(g.start[0], w[0]), Math.max(g.start[1], w[1]), w[0] < g.start[0]]);
+    } else if (g.kind === 'rect') setBox([Math.min(g.start[0], p[0]), Math.min(g.start[1], p[1]), Math.max(g.start[0], p[0]), Math.max(g.start[1], p[1]), false]);
+    else if (g.kind === 'box') setBox([Math.min(g.start[0], w[0]), Math.min(g.start[1], w[1]), Math.max(g.start[0], w[0]), Math.max(g.start[1], w[1]), w[0] < g.start[0]]);
   }
   function up() {
     const g = drag.current; drag.current = null;
     if (!g) return;
+    if (g.kind === 'rect') {
+      if (box && box[2] - box[0] >= 20 && box[3] - box[1] >= 20) {
+        const b = box;
+        ask('Board / enclosure name (may be empty)').then((text) => commit((d) => { const r = sch.applyOps(d, [{ op: 'rect', x: b[0], y: b[1], w: b[2] - b[0], h: b[3] - b[1], text: text?.trim() || '' }]); setSel(new Set(r.added)); }));
+      }
+      setBox(null); setTool('select'); return;
+    }
     if (g.kind === 'move' && (g.dx || g.dy)) { onCommit(preview || doc); setPreview(null); }
     else if (g.kind === 'move') setPreview(null);
     else if (g.kind === 'box' && box) {
@@ -201,6 +210,7 @@ export function Editor({ doc, sheets, project, theme, tool, setTool, sel, setSel
     else if (k === 'b') setTool('bus');
     else if (k === 'n' || k === 'l') setTool('net');
     else if (k === 't') setTool('text');
+    else if (k === 'e') setTool('rect');
     else if (k === 'v' || k === 's') setTool('select');
     else if (k === 'f') fit();
     else if (k === '/' || k === ' ' && wire) setFlip((f) => !f);
@@ -226,7 +236,7 @@ export function Editor({ doc, sheets, project, theme, tool, setTool, sel, setSel
     const w = shown.wires.find((x) => x.id === hover);
     if (w) { const i = conn.pointNet.get(ptKey(...w.pts[0])); return `${w.kind === 'bus' ? 'busbar' : 'wire'} · net ${i == null ? '?' : conn.nets[i].name}${i == null ? '' : ` (${conn.nets[i].nodes.length} pins)`}`; }
     const l = shown.labels.find((x) => x.id === hover);
-    return l ? `${l.kind === 'net' ? 'net label' : 'text'} · ${l.text}` : null;
+    return l ? `${{ net: 'net label', rect: 'board frame', table: 'table' }[l.kind] || 'text'} · ${l.text}` : null;
   }, [hover, shown, conn]);
   useEffect(() => { onStatus({ cursor, zone: sch.zoneOf(doc, ...cursor), hover: hoverInfo, issues, zoom: view?.k }); }, [cursor, hoverInfo, issues, view?.k]);
 
@@ -269,13 +279,13 @@ export function Editor({ doc, sheets, project, theme, tool, setTool, sel, setSel
               </g>
             );
           })}
-          {shown.labels.map((l) => <g key={l.id} data-id={l.id} className="item" dangerouslySetInnerHTML={{ __html: sch.labelSvg(l, C) }} />)}
+          {shown.labels.map((l) => <g key={l.id} data-id={l.id} className="item" dangerouslySetInnerHTML={{ __html: sch.labelSvg(l, C, shown) }} />)}
           {conn.junctions.map(([x, y]) => <circle key={`${x},${y}`} cx={x} cy={y} r="3.2" fill={C.junction} pointerEvents="none" />)}
           <g dangerouslySetInnerHTML={{ __html: xrefs }} pointerEvents="none" />
           {selBoxes.map(([id, b]) => <rect key={id} className="selbox" x={b[0] - 5} y={b[1] - 5} width={b[2] - b[0] + 10} height={b[3] - b[1] + 10} rx="3" pointerEvents="none" />)}
           {ghost && sch.SYMBOLS[ghost.sym] && <g opacity=".55" pointerEvents="none" dangerouslySetInnerHTML={{ __html: sch.partSvg(ghost, C) }} />}
           {wirePreview && <polyline points={wirePreview.map((p) => p.join(',')).join(' ')} fill="none" stroke={C.wire} strokeWidth={tool === 'bus' ? 5 : 1.6} strokeDasharray="5 4" pointerEvents="none" />}
-          {(tool === 'wire' || tool === 'bus' || tool === 'net' || tool === 'text') && <g pointerEvents="none" stroke={C.label} strokeWidth={1 / v.k}><path d={`M${cursor[0] - 8} ${cursor[1]}h16M${cursor[0]} ${cursor[1] - 8}v16`} /></g>}
+          {(tool === 'wire' || tool === 'bus' || tool === 'net' || tool === 'text' || tool === 'rect' || tool === 'table') && <g pointerEvents="none" stroke={C.label} strokeWidth={1 / v.k}><path d={`M${cursor[0] - 8} ${cursor[1]}h16M${cursor[0]} ${cursor[1] - 8}v16`} /></g>}
           {box && <rect className={`boxsel ${box[4] ? 'cross' : ''}`} x={box[0]} y={box[1]} width={box[2] - box[0]} height={box[3] - box[1]} strokeWidth={1 / v.k} pointerEvents="none" />}
         </g>
       </svg>
