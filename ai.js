@@ -92,28 +92,52 @@ export async function runAgent({ provider, system, messages, tools, signal, onTe
 // ---------- Gemini ----------
 const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
 const KEEP = 60; // messages sent to the model; older ones are dropped at a user turn
+const BUDGET = 90000; // characters (~25k tokens) of history per request, not counting images; older turns are dropped first
+const READ = new Set(['get_sheet', 'get_netlist', 'get_bom', 'list_sheets']);
 
+// Every request resends the whole conversation, so what is sent is trimmed: only the newest copy of a repeated read stays in
+// full, only the newest pasted image is attached, and the oldest turns go once the history passes BUDGET.
 function contents(messages, imageDir, shots) {
   const from = messages.length > KEEP ? messages.findIndex((m, i) => i >= messages.length - KEEP && m.role === 'user') : 0;
   const msgs = messages.slice(from < 0 ? 0 : from);
   const lastTool = msgs.findLastIndex((m) => m.role === 'tool');
-  return msgs.map((m, i) => {
+  const lastImg = msgs.findLastIndex((m) => m.role === 'user' && m.images?.length);
+  const args = {};
+  for (const m of msgs) for (const c of m.calls || []) args[c.id] = JSON.stringify(c.args);
+  const latest = new Map(); // a read repeated later with the same arguments makes the earlier result stale
+  msgs.forEach((m, i) => { if (m.role === 'tool') for (const r of m.results) if (READ.has(r.name)) latest.set(r.name + args[r.id], i); });
+  const out = msgs.map((m, i) => {
     if (m.role === 'user') {
       const parts = [];
-      for (const f of m.images || []) {
-        try { parts.push({ inlineData: { mimeType: MIME[path.extname(f)] || 'image/png', data: fs.readFileSync(path.join(imageDir, f)).toString('base64') } }); } catch { /* file gone */ }
+      if (i === lastImg) {
+        for (const f of m.images) {
+          try { parts.push({ inlineData: { mimeType: MIME[path.extname(f)] || 'image/png', data: fs.readFileSync(path.join(imageDir, f)).toString('base64') } }); } catch { /* file gone */ }
+        }
       }
-      parts.push({ text: (m.ctx || '') + m.text });
+      parts.push({ text: (m.ctx || '') + m.text + (m.images?.length && i !== lastImg ? ` [${m.images.length} image(s) were attached here; not shown again]` : '') });
       return { role: 'user', parts };
     }
     if (m.role === 'assistant') {
       const parts = m.raw?.length ? m.raw : [...(m.text ? [{ text: m.text }] : []), ...(m.calls || []).map((c) => ({ functionCall: { name: c.name, args: c.args } }))];
       return { role: 'model', parts: parts.length ? parts : [{ text: '(no reply)' }] };
     }
-    const parts = m.results.map((r) => ({ functionResponse: { name: r.name, response: r.isError ? { error: r.text } : { result: r.text } } }));
+    const parts = m.results.map((r) => {
+      const stale = READ.has(r.name) && latest.get(r.name + args[r.id]) !== i;
+      return { functionResponse: { name: r.name, response: r.isError ? { error: r.text } : { result: stale ? '(older result left out: a later identical call has the current one)' : r.text } } };
+    });
     if (shots && i === lastTool) for (const r of m.results) for (const s of r.shots || []) parts.push({ inlineData: { mimeType: s.mime, data: s.data } });
     return { role: 'user', parts };
   });
+  const size = (c) => JSON.stringify(c.parts.map((p) => (p.inlineData ? 0 : p))).length;
+  const turnStart = (c) => c.role === 'user' && !c.parts.some((p) => p.functionResponse);
+  let total = out.reduce((a, c) => a + size(c), 0), first = 0;
+  while (total > BUDGET) {
+    const j = out.findIndex((c, k) => k > first && turnStart(c));
+    if (j < 0) break;
+    for (let k = first; k < j; k++) total -= size(out[k]);
+    first = j;
+  }
+  return out.slice(first);
 }
 
 const plain = (p) => Object.keys(p).length === 1 && typeof p.text === 'string';

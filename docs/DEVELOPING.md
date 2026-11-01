@@ -116,7 +116,13 @@ This is fine for one user with a couple of windows. It is not multi-user collabo
 - `snapshot` returns a PNG. Gemini function responses are text, so the image rides along in the same turn as an inline image part, for the latest tool turn only, and is not saved. If the API answers 400 to that, the provider drops images for the rest of the process and carries on.
 - Settings: `GEMINI_API_KEY` (header, never in a URL), `GEMINI_MODEL` (default `gemini-3.5-flash`; check Google's current list), `GEMINI_BASE_URL` (tests). A git-ignored `.env` is loaded at start; see `.env.example`.
 - `npm test` runs the loop against a scripted fake Gemini (split SSE events, signature replay, image fallback, rejected key). **It has not been run against the real API in this repo's tests.** Try "a DOL motor starter" with a real key after any change here, and watch for 429s on the free tier (no per-user limit yet).
-- Prompt: `API_PROMPT` = `PROMPT` plus two lines about having no shell.
+- Prompt: `API_PROMPT` = `PROMPT` plus a few lines about having no shell, plus the whole symbol library (`lib.symbolText()`, compact text), so the model needs no `list_symbols` step. Each user message starts with `lib.sheetsSummary()`, which replaces `list_sheets`.
+- **Token economy** (every step is a request that resends everything, and quotas count both requests and tokens):
+  - Fixed cost per request is about 4,000 tokens: tool declarations ~1,900 (mostly `OPS_DOC`), prompt plus library ~2,200. That is now ~75% of a typical run, so it is the next thing to shrink, but only with a side-by-side quality check on the live model.
+  - `contents()` in ai.js sends only the newest copy of a repeated `get_sheet`/`get_netlist`/`get_bom`/`list_sheets` (same arguments), only the newest pasted image, and at most `BUDGET` characters of history, dropping whole oldest turns first. The stored transcript is untouched.
+  - `get_sheet` omits `net` on unconnected pins; `list_symbols` is text without bounding boxes (placed parts still carry `bbox`).
+  - Measured on a scripted motor-starter run (7 requests): about 38k tokens in total, down from about 58k over 9 requests before these changes.
+- **Free-tier reality (seen 2026-11-01):** a free Gemini key returned 429 with "limit: 20 ... requests per day per model". One drawing is 5-8 requests, so a free key serves roughly three drawings a day for the whole server. Fine for a demo, not for users: plan on a paid key (and per-user caps) before inviting anyone. Look up your project's real limits at https://aistudio.google.com/rate-limit.
 
 **What Claude is told** is all in two places: `PROMPT` (server.js, drawing conventions) and the tool descriptions plus `OPS_DOC` (lib.js, the API). When Claude draws badly, fix those first. Then improve what `check()` reports, because Claude reads the issues and fixes them.
 

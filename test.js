@@ -254,6 +254,66 @@ await ok('agent loop: tools, replayed thought signatures, image fallback, split 
   } finally { fake.close(); }
 });
 
+// a fake Gemini that answers request n with replies[n] (a list of parts) and keeps the request bodies
+async function fakeGemini(replies) {
+  const bodies = [];
+  const srv = http.createServer((req, res) => { let b = ''; req.on('data', (d) => { b += d; }).on('end', () => {
+    bodies.push(JSON.parse(b));
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(`data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: replies[bodies.length - 1] || [{ text: 'end' }] } }] })}\n\n`);
+  }); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  return { bodies, provider: ai.geminiProvider({ apiKey: 'k', baseUrl: `http://127.0.0.1:${srv.address().port}` }), close: () => srv.close() };
+}
+const toolCtx = { sheetChanged() {}, sheetsChanged() {}, exported() {} };
+
+await ok('symbol library as compact text', () => {
+  const all = lib.symbolText();
+  assert.match(all, /# Protection\n[^]*breaker_3p \| Circuit breaker, 3-pole \| Q \| 1@-20,-30 3@0,-30 5@20,-30 2@-20,30 4@0,30 6@20,30/);
+  assert.ok(all.length < 6000, `library is ${all.length} chars`);
+  assert.ok(!lib.symbolText('breaker').includes('resistor') && lib.symbolText('nope-x').startsWith('no symbol matches'));
+  assert.match(lib.sheetsSummary(s), /sheets now: 1 "Motor starter" A3, \d+ parts; /);
+});
+
+await ok('agent loop sends only the newest copy of a repeated read, and the newest pasted image', async () => {
+  const s3 = lib.openSession('t3', tmp);
+  const fake = await fakeGemini([
+    [{ functionCall: { name: 'get_sheet', args: { sheet: '1' } } }],
+    [{ functionCall: { name: 'edit_sheet', args: { sheet: '1', ops: '[{"op":"add","sym":"resistor","x":100,"y":100}]' } } }],
+    [{ functionCall: { name: 'get_sheet', args: { sheet: '1' } } }],
+  ]);
+  fs.mkdirSync(path.join(tmp, 'img'), { recursive: true });
+  for (const f of ['a.png', 'b.png']) fs.writeFileSync(path.join(tmp, 'img', f), 'x');
+  const messages = [{ role: 'user', text: 'first', images: ['a.png'] }, { role: 'assistant', text: 'seen', calls: [] }, { role: 'user', text: 'second', images: ['b.png'] }];
+  try {
+    await ai.runAgent({ provider: fake.provider, system: 's', messages, tools: ai.apiTools(lib.toolDefs(s3, toolCtx)), imageDir: path.join(tmp, 'img') });
+    const last = fake.bodies.at(-1).contents;
+    const reads = last.flatMap((c) => c.parts).filter((p) => p.functionResponse?.name === 'get_sheet').map((p) => p.functionResponse.response.result);
+    assert.equal(reads.length, 2);
+    assert.match(reads[0], /^\(older result left out/);
+    assert.ok(reads[1].includes('"parts"'), 'the latest read stays in full');
+    assert.ok(!last[0].parts.some((p) => p.inlineData) && last[0].parts.at(-1).text.includes('not shown again'), 'older image is dropped');
+    assert.ok(last[2].parts.some((p) => p.inlineData), 'newest image is attached');
+  } finally { fake.close(); }
+});
+
+await ok('agent loop drops the oldest turns past the history budget, never mid-turn', async () => {
+  const fake = await fakeGemini([[{ text: 'ok' }]]);
+  const big = 'x'.repeat(100000);
+  const messages = [
+    { role: 'user', text: big }, { role: 'assistant', text: 'a', calls: [{ id: 'c0', name: 'list_sheets', args: {} }], raw: [{ functionCall: { name: 'list_sheets', args: {} } }] },
+    { role: 'tool', results: [{ id: 'c0', name: 'list_sheets', text: 'r' }] }, { role: 'assistant', text: 'b', calls: [] },
+    { role: 'user', text: 'recent question' },
+  ];
+  try {
+    await ai.runAgent({ provider: fake.provider, system: 's', messages, tools: [], imageDir: tmp });
+    const sent = fake.bodies[0].contents;
+    assert.equal(sent.length, 1, 'only the recent turn is sent');
+    assert.equal(sent[0].parts[0].text, 'recent question');
+    assert.equal(messages.length, 6, 'the stored transcript is untouched');
+  } finally { fake.close(); }
+});
+
 await ok('a rejected API key gives a clear error', async () => {
   const fake = http.createServer((req, res) => { req.resume().on('end', () => { res.writeHead(403, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'API key not valid' } })); }); });
   await new Promise((r) => fake.listen(0, '127.0.0.1', r));

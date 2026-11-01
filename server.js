@@ -85,9 +85,13 @@ How to draw well:
 - Issues include text overlaps ("Q5 text ... overlaps Q6"): widen spacing or set props.labelPos "below".
 - After a batch, read the issues in the edit_sheet result and take a snapshot to check the drawing; fix overlaps, dangling pins and crossing text before you finish.
 When the user pastes an image of a schematic, recreate it as an editable schematic (a new sheet unless told otherwise), keeping refs, values and topology.`;
-const API_PROMPT = `${PROMPT}
-You act only through the voltbridge tools: you have no shell and no file access. Each user message starts with [voltbridge] lines naming the sheet the user is looking at and their selection.
-If edit_sheet reports errors or issues, fix them and look again before you answer. End with a short summary of what you drew or changed.`;
+// Every API request carries the prompt, so the symbol library goes in here once (no list_symbols step) and each user message names the sheets.
+const API_PROMPT = `${PROMPT.replace('Call list_symbols once to learn symbol keys, pin names and pin offsets before placing parts.', 'Use the symbol keys, pin names and pin offsets listed below when placing parts.')}
+You act only through the voltbridge tools: you have no shell and no file access. Each user message starts with [voltbridge] lines giving the sheets, the sheet the user is looking at and their selection, so you do not need list_sheets or list_symbols: start from get_sheet when you need what is already drawn, and call it again only after you changed the sheet.
+If edit_sheet reports errors or issues, fix them and look again before you answer. End with a short summary of what you drew or changed.
+
+Symbol library:
+${lib.symbolText()}`;
 const DEFAULT_IMAGE_ASK ='Recreate this image as an editable schematic on a new sheet.';
 
 const live = new Map();
@@ -131,7 +135,7 @@ async function chat(s, text, images = [], sheetId, selection = []) {
   const doc = s.docs[sheetId];
   if (doc) prefix += `[voltbridge] the user is looking at sheet ${doc.id} "${doc.name}"${selection.length ? `, with selected: ${selection.join(', ')}` : ''}\n`;
   broadcast(s, { t: 'user', text, images: files.length ? imgUrls(s, IMG_LINE + files.join(', ')) : [] });
-  if (PROVIDER !== 'claude') return chatApi(s, text, prefix + '\n', files);
+  if (PROVIDER !== 'claude') return chatApi(s, text, `${lib.sheetsSummary(s)}\n${prefix}\n`, files);
   if (files.length) prefix += IMG_LINE + files.map((f) => path.join(s.dir, 'images', f)).join(', ') + '\n';
   const content = [...images.map((img) => ({ type: 'image', source: { type: 'base64', media_type: img.mime, data: img.data } })), { type: 'text', text: `${prefix}\n${text}` }];
   const prompt = files.length ? (async function* () { yield { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null }; })() : content.at(-1).text;

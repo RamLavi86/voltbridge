@@ -638,7 +638,7 @@ export function describe(sheet, sheets = [sheet]) {
     parts: sheet.parts.map((p) => ({
       id: p.id, ref: p.ref, sym: p.sym, x: p.x, y: p.y, ...(p.rot ? { rot: p.rot } : {}), ...(p.mirror ? { mirror: true } : {}), props: p.props,
       zone: zoneOf(sheet, p.x, p.y), bbox: bboxOf(p),
-      pins: Object.fromEntries(pinsOf(p).map((q) => [q.name, { at: [q.x, q.y], net: netAt(q.x, q.y) }])),
+      pins: Object.fromEntries(pinsOf(p).map((q) => { const net = netAt(q.x, q.y); return [q.name, { at: [q.x, q.y], ...(net ? { net } : {}) }]; })),
       ...(symbolOf(p).contact && xr[fullRef(sheet, p.ref)]?.device ? { coilAt: xr[fullRef(sheet, p.ref)].device.loc } : {}),
     })),
     wires: sheet.wires.map((w) => ({ id: w.id, pts: w.pts, net: netAt(...w.pts[0]), ...(w.kind ? { kind: w.kind } : {}), ...(w.label ? { label: w.label } : {}) })),

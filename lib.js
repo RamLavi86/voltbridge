@@ -142,10 +142,20 @@ export async function exportFiles(s, format, doc) {
 // ---------- Claude's tools ----------
 const text = (t) => ({ content: [{ type: 'text', text: typeof t === 'string' ? t : JSON.stringify(t) }] });
 const guard = (fn) => async (args) => { try { return await fn(args); } catch (e) { return { ...text(String(e.message || e)), isError: true }; } };
-const symbolList = (q) => Object.values(sch.SYMBOLS).filter((x) => !q || `${x.key} ${x.name} ${x.cat}`.toLowerCase().includes(q.toLowerCase())).map((x) => {
-  const sym = x.dynamic ? sch.symbolOf({ sym: x.key, props: {} }) : x;
-  return { sym: x.key, name: x.name, cat: x.cat, prefix: x.prefix || null, pins: sym.pins.map((p) => `${p.n}@${p.x},${p.y}`).join(' '), box: sym.box, ...(x.power ? { net: x.power } : {}), ...(x.contact ? { contact: true } : {}), ...(x.dynamic ? { props: x.props } : {}), ...(x.value ? { value: x.value } : {}) };
-});
+// The symbol library as compact text, one line per symbol under its category (the JSON form cost twice the tokens).
+export function symbolText(q) {
+  const byCat = {};
+  for (const x of Object.values(sch.SYMBOLS)) {
+    if (q && !`${x.key} ${x.name} ${x.cat}`.toLowerCase().includes(q.toLowerCase())) continue;
+    const sym = x.dynamic ? sch.symbolOf({ sym: x.key, props: {} }) : x;
+    const notes = [x.power && `names net ${x.power}`, x.contact && 'contact: takes its coil\'s ref', x.dynamic && `props ${Object.entries(x.props || {}).map(([k, v]) => `${k}=${v}`).join(',')}`, x.value && `default value ${x.value}`].filter(Boolean);
+    (byCat[x.cat] ||= []).push([x.key, x.name, x.prefix || '-', sym.pins.map((p) => `${p.n}@${p.x},${p.y}`).join(' '), ...notes].join(' | '));
+  }
+  const head = 'key | name | designator | pins NAME@x,y (local coords at rot 0; two-terminal parts stand vertically with pin 1 on top, rot 90 lays them horizontally) | notes';
+  return Object.keys(byCat).length ? `${head}\n${Object.entries(byCat).map(([c, l]) => `# ${c}\n${l.join('\n')}`).join('\n')}` : `no symbol matches "${q}"`;
+}
+// One line per sheet, for the model to start from without a list_sheets call.
+export const sheetsSummary = (s) => `[voltbridge] sheets now: ${allSheets(s).map((d) => `${d.id} "${d.name}" ${d.size}, ${d.parts.length} parts`).join('; ')}`;
 
 const OPS_DOC = `ops, applied in order (all coordinates snap to the 10px grid; sheet origin top left, y grows down):
 - {op:"add", sym, x, y, ref?, rot?: 0|90|180|270, mirror?, props?} places a symbol; ref is auto-numbered from the symbol's prefix when omitted (K1, Q2...). props: value, partNo, maker, description, or anything else.
@@ -169,9 +179,9 @@ export function toolDefs(s, ctx) {
   return [
     def('list_sheets', 'List the sheets of this voltbridge project: [{id, name, size, parts, wires}] and the project title fields.', {},
       guard(async () => text({ project: s.project, sheets: allSheets(s).map((d) => ({ id: d.id, name: d.name, size: d.size, parts: d.parts.length, wires: d.wires.length })) }))),
-    def('list_symbols', 'List the symbol library: {sym, name, cat, prefix, pins: "NAME@x,y ..." (local coords, rot 0), box: [x1,y1,x2,y2]}. Two-terminal parts stand vertically, pin 1 on top; rot 90 lays them horizontally. Optional query filters by text.',
-      { query: z.string().optional() }, guard(async ({ query }) => text(symbolList(query)))),
-    def('get_sheet', 'Read a sheet: parts {id, ref, sym, x, y, rot, props, zone, bbox, pins: {NAME: {at:[x,y], net}}}, wires {id, pts, net}, labels, nets {name, nodes}, and issues (unconnected pins, diagonal wires, contacts without a coil...). The sheet extent is given in px; keep the drawing inside it, clear of the title block (bottom right 380x100).',
+    def('list_symbols', 'List the symbol library as text, one line per symbol: key | name | designator | pins NAME@x,y (local coords at rot 0) | notes. Two-terminal parts stand vertically, pin 1 on top; rot 90 lays them horizontally. Optional query filters by text.',
+      { query: z.string().optional() }, guard(async ({ query }) => text(symbolText(query)))),
+    def('get_sheet', 'Read a sheet: parts {id, ref, sym, x, y, rot, props, zone, bbox, pins: {NAME: {at:[x,y], net}} (net only when connected)}, wires {id, pts, net}, labels, nets {name, nodes}, and issues (unconnected pins, diagonal wires, contacts without a coil...). The sheet extent is in px; keep the drawing inside it, clear of the title block (bottom right 380x100).',
       { sheet: z.string().describe('sheet id or name') }, guard(async ({ sheet }) => text(sch.describe(findSheet(s, sheet), allSheets(s))))),
     def('edit_sheet', `Change a sheet in one batch. ${OPS_DOC} Returns {added: ["p3=K1", "w4", ...], errors, warnings, issues}. Invalid ops are reported one by one; the rest apply.`,
       { sheet: z.string().describe('sheet id or name'), ops: z.array(z.record(z.string(), z.any())).describe('the op objects described above, applied in order') },
