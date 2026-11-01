@@ -149,6 +149,13 @@ The current design is only safe for one person on their own machine. To host it:
 4. **Other AI assistants:** expose `makeTools` as a standalone remote MCP server (streamable HTTP + OAuth). The model is server-side already, so Claude Desktop, Claude Code or other agents could draw without the web chat.
 5. If Claude ever needs to run code (calculations, cable sizing), give each user a sandbox, such as a hosted agent with a managed sandbox. Never use Bash on the host.
 
+## Hosted deployment (interim, no accounts yet)
+
+- `Dockerfile` (Node 22 + DejaVu fonts, builds `dist/`), `render.yaml` (Render blueprint, auto-deploy once CI passes), `.github/workflows/ci.yml` (`npm test` + UI build on pushes and PRs).
+- Off loopback (`HOST=0.0.0.0`, set by the Dockerfile) the server needs `VOLTBRIDGE_TOKEN`, **turns chat off** (`CHAT` in server.js; `VOLTBRIDGE_CHAT=1` overrides, only for a trusted private machine), ignores a client-supplied working folder and refuses the `outDir` message. `/healthz` is the only unauthenticated path.
+- Projects live in `VOLTBRIDGE_SESSIONS` (`/data/sessions` in the image). Without a persistent disk mounted there they vanish on redeploy.
+- Everyone with the token shares the same sessions. Real per-user storage and login come later.
+
 ## Git
 
 Local repository only, no remote. Commits: `591a1f2` initial app, `62e344e` distribution boards (multi-pole devices, pole marking, loads, circuit props/table, ref prefixes, RTL text, array op, overlap check). The original feature requests are in `~/ioe/schematics/voltbridge-dev-requests.md`.

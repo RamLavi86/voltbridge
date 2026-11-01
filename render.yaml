@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: voltbridge
+    runtime: docker
+    plan: free # sleeps when idle and has no disk: saved projects are lost on redeploy. Use a paid plan plus a disk at /data to keep them.
+    autoDeployTrigger: checksPass # redeploy on pushes to main once CI passes
+    healthCheckPath: /healthz
+    envVars:
+      - key: VOLTBRIDGE_TOKEN
+        generateValue: true # open https://<service>.onrender.com/?token=<value> once; read the value in the Render dashboard

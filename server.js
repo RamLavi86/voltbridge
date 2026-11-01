@@ -23,6 +23,9 @@ const LOCAL = ['127.0.0.1', 'localhost', '::1'].includes(HOST);
 const tokenFile = path.join(lib.HOME, 'token');
 const TOKEN = LOCAL ? null : process.env.VOLTBRIDGE_TOKEN || (fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, 'utf8').trim()
   : (fs.mkdirSync(lib.HOME, { recursive: true }), fs.writeFileSync(tokenFile, crypto.randomBytes(18).toString('base64url'), { mode: 0o600 }), fs.readFileSync(tokenFile, 'utf8')));
+// Claude here has Bash and file access with no prompts, so off loopback chat stays off unless VOLTBRIDGE_CHAT=1,
+// and clients can't pick the working or output folders on the server's disk.
+const CHAT = LOCAL || process.env.VOLTBRIDGE_CHAT === '1';
 const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const authed = (req) => !TOKEN || same(/(?:^|;\s*)vb=([^;]+)/.exec(req.headers.cookie || '')?.[1], TOKEN);
 
@@ -40,6 +43,7 @@ const inside = (root, p) => { const f = path.join(root, path.normalize(p)); retu
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   const p = decodeURIComponent(u.pathname);
+  if (p === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
   if (TOKEN && same(u.searchParams.get('token'), TOKEN)) {
     res.writeHead(302, { 'Set-Cookie': `vb=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`, Location: '/' });
     return res.end();
@@ -81,7 +85,7 @@ const broadcast = (s, m, except) => s.clients.forEach((ws) => ws !== except && s
 function attach(name, cwd) {
   if (!live.has(name)) {
     const fresh = !fs.existsSync(path.join(lib.SESSIONS, name, 'session.json'));
-    const s = lib.openSession(name, cwd && fs.existsSync(cwd) ? path.resolve(cwd) : CWD);
+    const s = lib.openSession(name, LOCAL && cwd && fs.existsSync(cwd) ? path.resolve(cwd) : CWD);
     lib.saveSession(s);
     Object.assign(s, { clients: new Set(), q: null, timer: null, dirty: new Set() });
     live.set(name, s);
@@ -105,6 +109,7 @@ const IMG_LINE = '[voltbridge] pasted images saved as: ';
 const imgUrls = (s, line) => line.slice(IMG_LINE.length).split(', ').map((f) => `/img/${encodeURIComponent(s.name)}/${path.basename(f)}`);
 
 async function chat(s, text, images = [], sheetId, selection = []) {
+  if (!CHAT) return broadcast(s, { t: 'error', text: 'Chat is turned off on this server. The schematic editor works as usual.' });
   if (s.q) return broadcast(s, { t: 'error', text: 'Claude is still working; press Stop first.' });
   const files = images.length ? lib.saveImages(s, images) : [];
   text = text.trim() || (files.length ? DEFAULT_IMAGE_ASK : '');
@@ -209,7 +214,7 @@ wss.on('connection', (ws) => {
         if (i >= 0) { const [x] = s.sheets.splice(i, 1); s.sheets.splice(Math.max(0, Math.min(m.index, s.sheets.length)), 0, x); lib.saveSession(s, []); ctxFor(s).sheetsChanged(); }
       } else if (m.t === 'project') { s.project = { ...s.project, ...m.fields }; lib.saveSession(s, []); broadcast(s, sheetsMsg(s)); }
       else if (m.t === 'export') { const f = await lib.exportFiles(s, m.format, m.sheet ? s.docs[m.sheet] : null); send(ws, { t: 'exported', files: f }); }
-      else if (m.t === 'outDir') { s.outDir = path.resolve(s.cwd, m.dir); lib.saveSession(s, []); broadcast(s, { t: 'outDir', outDir: s.outDir }); }
+      else if (m.t === 'outDir') { if (!LOCAL) throw new Error('The output folder is fixed on a hosted server.'); s.outDir = path.resolve(s.cwd, m.dir); lib.saveSession(s, []); broadcast(s, { t: 'outDir', outDir: s.outDir }); }
     } catch (e) { send(ws, { t: 'error', text: String(e.message || e), for: m.t }); }
   });
   ws.on('close', () => s?.clients.delete(ws));
