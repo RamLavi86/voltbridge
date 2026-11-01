@@ -241,7 +241,7 @@ await ok('agent loop: tools, replayed thought signatures, image fallback, split 
     assert.ok(s2.docs[1].parts.some((p) => p.sym === 'resistor'), 'edit_sheet ran with its JSON-string ops');
     assert.deepEqual(s2.chat.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant', 'tool', 'assistant', 'tool', 'assistant']);
     assert.deepEqual(usage, { prompt: 40, output: 20 }, 'four answered steps; the rejected request adds nothing');
-    assert.equal(headers[0], 'k /v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse', 'key goes in a header, not the URL');
+    assert.equal(headers[0], 'k /v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse', 'key goes in a header, not the URL');
     assert.ok(bodies[0].tools[0].functionDeclarations.some((d) => d.name === 'edit_sheet'));
     assert.equal(bodies[0].contents[0].parts.at(-1).text, '[voltbridge] test\n\ndraw a resistor');
     assert.equal(bodies[1].contents[1].parts[1].thoughtSignature, 'sig1', 'model parts are replayed as received');

@@ -118,7 +118,7 @@ function contents(messages, imageDir, shots) {
 
 const plain = (p) => Object.keys(p).length === 1 && typeof p.text === 'string';
 
-export function geminiProvider({ apiKey, model = 'gemini-2.5-flash', baseUrl = 'https://generativelanguage.googleapis.com' }) {
+export function geminiProvider({ apiKey, model = 'gemini-3.5-flash', baseUrl = 'https://generativelanguage.googleapis.com' }) {
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
   let shots = true; // some models refuse images inside a tool turn: then we fall back to text only
 
@@ -126,8 +126,14 @@ export function geminiProvider({ apiKey, model = 'gemini-2.5-flash', baseUrl = '
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(url, { method: 'POST', signal, headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body) });
       if (res.ok) return res;
-      const err = await res.json().then((j) => j.error?.message, () => null);
-      if ([429, 500, 503].includes(res.status) && attempt < 2) { await sleep(2000 * (attempt + 1), signal); continue; }
+      const j = await res.json().catch(() => ({}));
+      const err = j.error?.message;
+      if ([429, 500, 503].includes(res.status) && attempt < 2) {
+        // a 429 says how long to wait ("retryDelay": "23s"); per-minute limits need that, not 2 seconds
+        const asked = parseFloat(j.error?.details?.find((d) => d.retryDelay)?.retryDelay) || 0;
+        await sleep(Math.min(Math.max(asked + 1, 2 * (attempt + 1)), 30) * 1000, signal);
+        continue;
+      }
       const e = new Error(res.status === 429 ? 'Gemini is rate limiting this server (the free tier is shared by all users). Try again in a minute.'
         : res.status === 401 || res.status === 403 || /API key/i.test(err || '') ? 'The Gemini API key was rejected. Check GEMINI_API_KEY.'
         : `Gemini error ${res.status}: ${String(err || res.statusText).slice(0, 300)}`);

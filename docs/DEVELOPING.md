@@ -114,7 +114,7 @@ This is fine for one user with a couple of windows. It is not multi-user collabo
 - `runAgent` is the loop: one `provider.step()` per model call (streamed over SSE, text goes out as `delta`), run the tool calls, append the results, repeat up to 25 steps. A new provider is an object with `step()` like `geminiProvider`.
 - The transcript is ours: `s.chat` in `chat.json` per session (user text plus the `[voltbridge]` context lines, assistant text and calls, tool results). The model's own parts are replayed as received (`raw`), which keeps Gemini's thought signatures. Only the last 60 messages are sent.
 - `snapshot` returns a PNG. Gemini function responses are text, so the image rides along in the same turn as an inline image part, for the latest tool turn only, and is not saved. If the API answers 400 to that, the provider drops images for the rest of the process and carries on.
-- Settings: `GEMINI_API_KEY` (header, never in a URL), `GEMINI_MODEL` (default `gemini-2.5-flash`; check Google's current list), `GEMINI_BASE_URL` (tests). A git-ignored `.env` is loaded at start; see `.env.example`.
+- Settings: `GEMINI_API_KEY` (header, never in a URL), `GEMINI_MODEL` (default `gemini-3.5-flash`; check Google's current list), `GEMINI_BASE_URL` (tests). A git-ignored `.env` is loaded at start; see `.env.example`.
 - `npm test` runs the loop against a scripted fake Gemini (split SSE events, signature replay, image fallback, rejected key). **It has not been run against the real API in this repo's tests.** Try "a DOL motor starter" with a real key after any change here, and watch for 429s on the free tier (no per-user limit yet).
 - Prompt: `API_PROMPT` = `PROMPT` plus two lines about having no shell.
 
