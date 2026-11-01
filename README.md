@@ -45,6 +45,8 @@ Coils and their contacts share a designator (K1 coil, K1 13-14 contact). Under e
 
 `~/.voltbridge/sessions/<name>/`: `session.json` (Claude session id, cwd, output folder, sheet order, project title fields), `sheet-<n>.json`, `images/` (pasted chat images).
 
+Developer guide (architecture, protocol, sync, security, how to extend): [docs/DEVELOPING.md](docs/DEVELOPING.md).
+
 `web/schematic.js` is the shared model (symbols, geometry, connectivity, ops, BOM/netlist, SVG rendering), used by both the server and the browser. `lib.js` holds storage and Claude's tools, `server.js` the HTTP/WebSocket server and the Claude loop, `web/editor.jsx` the canvas, `web/panels.jsx` palette/toolbar/inspector/export.
 
 ## Not yet
