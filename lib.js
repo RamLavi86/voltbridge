@@ -34,7 +34,15 @@ export function openSession(name, cwd, root = SESSIONS) {
     try { s.docs[t.id] = JSON.parse(fs.readFileSync(sheetFile(s, t.id), 'utf8')); } catch { s.docs[t.id] = sch.emptySheet(t.id, t.name); }
   }
   s.nextSheetId = Math.max(s.nextSheetId || 1, ...s.sheets.map((t) => t.id + 1));
+  try { s.chat = JSON.parse(fs.readFileSync(path.join(dir, 'chat.json'), 'utf8')); } catch { s.chat = []; }
   return s;
+}
+
+// The chat transcript for API providers (the Claude Code engine keeps its own, see claudeSessionId).
+export function saveChat(s) {
+  fs.mkdirSync(s.dir, { recursive: true });
+  // shots (tool result images, see ai.js) are only needed for the next turn, so they stay out of the file
+  fs.writeFileSync(path.join(s.dir, 'chat.json'), JSON.stringify(s.chat, (k, v) => (k === 'shots' ? undefined : v)));
 }
 
 export function saveSession(s, ids = s.sheets.map((t) => t.id)) {
@@ -154,44 +162,46 @@ Part props with meaning: value (rating), partNo, maker, description (BOM); poles
 - {op:"sheet", name?, size?: A4|A3|A2|A1, refPrefix?, title?: {title, drawingNo, rev, author, date}}. refPrefix (e.g. "=MDB2") is the board's location designation: each prefix numbers its parts from Q1/X1... again, refs are unique per prefix, BOM/netlist/cross refs use "=MDB2-Q1". Draw one board per sheet with its own refPrefix. Adding a ref that is already taken in the prefix renumbers the part (see warnings).
 Several parts may share a ref: a coil K1 and its contacts K1 (contact_no/contact_nc/contactor_3p), each with distinct pin numbers (13-14, 23-24, 21-22...). Pin refs "K1:23" find the right one.`;
 
-export function makeTools(s, ctx) {
-  const opts = { alwaysLoad: true };
+// Provider-neutral tool definitions: {name, description, shape (zod), handler}. The Claude SDK and the API loop in ai.js both use these.
+export function toolDefs(s, ctx) {
+  const def = (name, description, shape, handler) => ({ name, description, shape, handler });
   const changed = (doc) => ctx.sheetChanged(doc);
   return [
-    tool('list_sheets', 'List the sheets of this voltbridge project: [{id, name, size, parts, wires}] and the project title fields.', {},
-      guard(async () => text({ project: s.project, sheets: allSheets(s).map((d) => ({ id: d.id, name: d.name, size: d.size, parts: d.parts.length, wires: d.wires.length })) })), opts),
-    tool('list_symbols', 'List the symbol library: {sym, name, cat, prefix, pins: "NAME@x,y ..." (local coords, rot 0), box: [x1,y1,x2,y2]}. Two-terminal parts stand vertically, pin 1 on top; rot 90 lays them horizontally. Optional query filters by text.',
-      { query: z.string().optional() }, guard(async ({ query }) => text(symbolList(query))), opts),
-    tool('get_sheet', 'Read a sheet: parts {id, ref, sym, x, y, rot, props, zone, bbox, pins: {NAME: {at:[x,y], net}}}, wires {id, pts, net}, labels, nets {name, nodes}, and issues (unconnected pins, diagonal wires, contacts without a coil...). The sheet extent is given in px; keep the drawing inside it, clear of the title block (bottom right 380x100).',
-      { sheet: z.string().describe('sheet id or name') }, guard(async ({ sheet }) => text(sch.describe(findSheet(s, sheet), allSheets(s)))), opts),
-    tool('edit_sheet', `Change a sheet in one batch. ${OPS_DOC} Returns {added: ["p3=K1", "w4", ...], errors, warnings, issues}. Invalid ops are reported one by one; the rest apply.`,
-      { sheet: z.string().describe('sheet id or name'), ops: z.array(z.record(z.string(), z.any())) },
+    def('list_sheets', 'List the sheets of this voltbridge project: [{id, name, size, parts, wires}] and the project title fields.', {},
+      guard(async () => text({ project: s.project, sheets: allSheets(s).map((d) => ({ id: d.id, name: d.name, size: d.size, parts: d.parts.length, wires: d.wires.length })) }))),
+    def('list_symbols', 'List the symbol library: {sym, name, cat, prefix, pins: "NAME@x,y ..." (local coords, rot 0), box: [x1,y1,x2,y2]}. Two-terminal parts stand vertically, pin 1 on top; rot 90 lays them horizontally. Optional query filters by text.',
+      { query: z.string().optional() }, guard(async ({ query }) => text(symbolList(query)))),
+    def('get_sheet', 'Read a sheet: parts {id, ref, sym, x, y, rot, props, zone, bbox, pins: {NAME: {at:[x,y], net}}}, wires {id, pts, net}, labels, nets {name, nodes}, and issues (unconnected pins, diagonal wires, contacts without a coil...). The sheet extent is given in px; keep the drawing inside it, clear of the title block (bottom right 380x100).',
+      { sheet: z.string().describe('sheet id or name') }, guard(async ({ sheet }) => text(sch.describe(findSheet(s, sheet), allSheets(s))))),
+    def('edit_sheet', `Change a sheet in one batch. ${OPS_DOC} Returns {added: ["p3=K1", "w4", ...], errors, warnings, issues}. Invalid ops are reported one by one; the rest apply.`,
+      { sheet: z.string().describe('sheet id or name'), ops: z.array(z.record(z.string(), z.any())).describe('the op objects described above, applied in order') },
       guard(async ({ sheet, ops }) => {
         const doc = findSheet(s, sheet);
         const r = editSheet(s, doc, ops);
         changed(doc);
         return { ...text({ ...r, issues: sch.check(doc, allSheets(s)).slice(0, 40) }), isError: r.errors.length === ops.length && ops.length > 0 };
-      }), opts),
-    tool('new_sheet', 'Create a new empty sheet (default A3 landscape, 1680x1190 px) and return its id. refPrefix: the board designation, e.g. "=MDB2" (designators restart per prefix).', { name: z.string().optional(), size: z.enum(['A4', 'A3', 'A2', 'A1']).optional(), refPrefix: z.string().optional() },
-      guard(async ({ name, size, refPrefix }) => { const d = addSheet(s, name, size); if (refPrefix) d.refPrefix = refPrefix; ctx.sheetsChanged(d.id); return text({ id: d.id, name: d.name, size: d.size, extent: sch.SIZES[d.size] }); }), opts),
-    tool('delete_sheet', 'Delete a sheet.', { sheet: z.string() },
-      guard(async ({ sheet }) => { const d = findSheet(s, sheet); removeSheet(s, d.id); ctx.sheetsChanged(); return text(`deleted sheet ${d.id} "${d.name}"`); }), opts),
-    tool('set_project', 'Set project-wide title block fields shown on every sheet (title, drawingNo, rev, author, date, company). A sheet\'s own title fields override them.',
-      { fields: z.record(z.string(), z.string()) }, guard(async ({ fields }) => { s.project = { ...s.project, ...fields }; saveSession(s, []); ctx.sheetsChanged(); return text(s.project); }), opts),
-    tool('snapshot', 'Render a sheet to PNG so you can see it. Use it after drawing to check spacing, overlaps and text.', { sheet: z.string(), width: z.number().optional().describe('px, default 1600') },
+      })),
+    def('new_sheet', 'Create a new empty sheet (default A3 landscape, 1680x1190 px) and return its id. refPrefix: the board designation, e.g. "=MDB2" (designators restart per prefix).', { name: z.string().optional(), size: z.enum(['A4', 'A3', 'A2', 'A1']).optional(), refPrefix: z.string().optional() },
+      guard(async ({ name, size, refPrefix }) => { const d = addSheet(s, name, size); if (refPrefix) d.refPrefix = refPrefix; ctx.sheetsChanged(d.id); return text({ id: d.id, name: d.name, size: d.size, extent: sch.SIZES[d.size] }); })),
+    def('delete_sheet', 'Delete a sheet.', { sheet: z.string() },
+      guard(async ({ sheet }) => { const d = findSheet(s, sheet); removeSheet(s, d.id); ctx.sheetsChanged(); return text(`deleted sheet ${d.id} "${d.name}"`); })),
+    def('set_project', 'Set project-wide title block fields shown on every sheet (title, drawingNo, rev, author, date, company). A sheet\'s own title fields override them.',
+      { fields: z.record(z.string(), z.string()) }, guard(async ({ fields }) => { s.project = { ...s.project, ...fields }; saveSession(s, []); ctx.sheetsChanged(); return text(s.project); })),
+    def('snapshot', 'Render a sheet to PNG so you can see it. Use it after drawing to check spacing, overlaps and text.', { sheet: z.string(), width: z.number().optional().describe('px, default 1600') },
       guard(async ({ sheet, width }) => {
         const d = findSheet(s, sheet);
         const buf = await png(sch.sheetSvg(d, allSheets(s), sch.LIGHT, s.project), Math.min(width || 1600, 3000));
         return { content: [{ type: 'image', data: Buffer.from(buf).toString('base64'), mimeType: 'image/png' }] };
-      }), opts),
-    tool('get_netlist', 'Netlist of the whole project: [{name, nodes: ["K1:A1", ...], sheets}]. Named nets (labels, power symbols) join across sheets.', {},
-      guard(async () => text(sch.netlist(allSheets(s)))), opts),
-    tool('get_bom', 'Bill of materials of the whole project: [{qty, refs, symbol, value, partNo, maker, description}]. Contacts are folded into their device.', {},
-      guard(async () => text(sch.bom(allSheets(s)))), opts),
-    tool('export', 'Write files to the output folder: svg or png (one sheet, or all when sheet is omitted), bom, netlist or circuits (the circuit schedule) as CSV, json (the whole project). Returns the paths.',
+      })),
+    def('get_netlist', 'Netlist of the whole project: [{name, nodes: ["K1:A1", ...], sheets}]. Named nets (labels, power symbols) join across sheets.', {},
+      guard(async () => text(sch.netlist(allSheets(s))))),
+    def('get_bom', 'Bill of materials of the whole project: [{qty, refs, symbol, value, partNo, maker, description}]. Contacts are folded into their device.', {},
+      guard(async () => text(sch.bom(allSheets(s))))),
+    def('export', 'Write files to the output folder: svg or png (one sheet, or all when sheet is omitted), bom, netlist or circuits (the circuit schedule) as CSV, json (the whole project). Returns the paths.',
       { format: z.enum(['svg', 'png', 'bom', 'netlist', 'circuits', 'json']), sheet: z.string().optional() },
-      guard(async ({ format, sheet }) => { const f = await exportFiles(s, format, sheet ? findSheet(s, sheet) : null); ctx.exported?.(f); return text(f); }), opts),
+      guard(async ({ format, sheet }) => { const f = await exportFiles(s, format, sheet ? findSheet(s, sheet) : null); ctx.exported?.(f); return text(f); })),
   ];
 }
 
-export const makeMcp = (s, ctx) => createSdkMcpServer({ name: 'voltbridge', version: '0.1.0', tools: makeTools(s, ctx) });
+export const makeTools = (s, ctx) => toolDefs(s, ctx).map((d) => tool(d.name, d.description, d.shape, d.handler, { alwaysLoad: true }));
+export const makeMcp =(s, ctx) => createSdkMcpServer({ name: 'voltbridge', version: '0.1.0', tools: makeTools(s, ctx) });

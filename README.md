@@ -23,6 +23,8 @@ npm test               # model, tools, sessions; writes test-out/sheet*.png
 | `VOLTBRIDGE_CWD` | `~/ioe`, else home | Working folder for new projects. |
 | `VOLTBRIDGE_SESSIONS` | `~/.voltbridge/sessions` | Where projects are stored. |
 
+**Gemini instead of Claude.** Put `GEMINI_API_KEY` (from https://aistudio.google.com/apikey) in a git-ignored `.env` (see `.env.example`) and start with `VOLTBRIDGE_PROVIDER=gemini`. The model then only has the voltbridge tools, with no shell or file access. A hosted server (`HOST` not loopback) uses Gemini automatically.
+
 ## Editor
 
 - **Palette** (left of the canvas): symbols by category, with search. Click one, then click on the sheet to place it (repeatedly; R rotates the ghost, Esc or right-click stops).

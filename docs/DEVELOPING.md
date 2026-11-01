@@ -14,7 +14,8 @@ Stack: Node 20.19+ (ESM, no TypeScript), `ws`, `@anthropic-ai/claude-agent-sdk`,
 |---|---|---|
 | `web/schematic.js` | ~860 | **The model.** Symbol library, geometry, connectivity/nets, edit ops, designators, checks, BOM/netlist/circuits, SVG rendering, bidi text. Pure JS, no DOM: imported by both the server and the browser. Most work happens here. |
 | `lib.js` | ~200 | Session storage on disk, sheet CRUD, exports, and Claude's MCP tools (`makeTools`) with the ops reference text (`OPS_DOC`). No HTTP, so `test.js` drives it directly. |
-| `server.js` | ~220 | HTTP (static `dist/`, pasted images), token auth, WebSocket protocol, the Claude loop (`chat()`), the appended system prompt (`PROMPT`), chat history replay. |
+| `ai.js` | ~170 | The API chat loop: Gemini adapter (SSE streaming), tool declarations from the zod shapes, `runAgent`. |
+| `server.js` | ~260 | HTTP (static `dist/`, pasted images), token auth, WebSocket protocol, the Claude loop (`chat()`), the appended system prompt (`PROMPT`), chat history replay. |
 | `web/main.jsx` | ~400 | App shell: WebSocket client, per-sheet undo/redo and sync, sheet tabs, session picker, chat and composer. |
 | `web/editor.jsx` | ~300 | The canvas: pan/zoom, tools (select, wire, bus, net, text, rect, table, place symbol), drag/rotate/mirror, box select, clipboard. |
 | `web/panels.jsx` | ~250 | Palette, toolbar, inspector (part, wire, label, sheet properties, checks, net list), export menu, status bar. |
@@ -104,6 +105,19 @@ This is fine for one user with a couple of windows. It is not multi-user collabo
 - Pasted images go to Claude as image blocks and are also saved under `images/`.
 - Tool events stream to the chat as `tool`/`tool_done`. Subagent messages (`parent_tool_use_id`) are skipped.
 
+### The API loop (Gemini, `chatApi()` in server.js, `ai.js`)
+
+`VOLTBRIDGE_PROVIDER=gemini` (the default off loopback) answers the chat with the Gemini API instead of the Claude Code engine. The model gets only the voltbridge tools: no shell, no files, so it is safe to host.
+
+- `lib.toolDefs()` is the single list of tools (`{name, description, shape (zod), handler}`); `makeTools` wraps it for the Claude SDK, `ai.apiTools` turns it into Gemini function declarations.
+- **Schema quirk:** Gemini rejects objects without `properties`, so free-form args (`edit_sheet`'s `ops`, an array of free-form objects) are declared as strings holding JSON and parsed before the handler runs (`clean()` in ai.js). If you add a tool with a free-form argument, it just works; if the model sends bad JSON the handler error goes back to it.
+- `runAgent` is the loop: one `provider.step()` per model call (streamed over SSE, text goes out as `delta`), run the tool calls, append the results, repeat up to 25 steps. A new provider is an object with `step()` like `geminiProvider`.
+- The transcript is ours: `s.chat` in `chat.json` per session (user text plus the `[voltbridge]` context lines, assistant text and calls, tool results). The model's own parts are replayed as received (`raw`), which keeps Gemini's thought signatures. Only the last 60 messages are sent.
+- `snapshot` returns a PNG. Gemini function responses are text, so the image rides along in the same turn as an inline image part, for the latest tool turn only, and is not saved. If the API answers 400 to that, the provider drops images for the rest of the process and carries on.
+- Settings: `GEMINI_API_KEY` (header, never in a URL), `GEMINI_MODEL` (default `gemini-2.5-flash`; check Google's current list), `GEMINI_BASE_URL` (tests). A git-ignored `.env` is loaded at start; see `.env.example`.
+- `npm test` runs the loop against a scripted fake Gemini (split SSE events, signature replay, image fallback, rejected key). **It has not been run against the real API in this repo's tests.** Try "a DOL motor starter" with a real key after any change here, and watch for 429s on the free tier (no per-user limit yet).
+- Prompt: `API_PROMPT` = `PROMPT` plus two lines about having no shell.
+
 **What Claude is told** is all in two places: `PROMPT` (server.js, drawing conventions) and the tool descriptions plus `OPS_DOC` (lib.js, the API). When Claude draws badly, fix those first. Then improve what `check()` reports, because Claude reads the issues and fixes them.
 
 ### Security model
@@ -143,7 +157,7 @@ On Ram's VM it was run under a restart loop, `~/.voltbridge/run.sh` (HOST=0.0.0.
 
 The current design is only safe for one person on their own machine. To host it:
 
-1. **Drop the Claude Code engine for the chat.** Call the Claude API (Messages API tool use) with only the voltbridge tools: no Bash, no file system. The tools in `lib.js` are plain functions over the model, so the change is mostly a rewrite of `chat()`. Use an organisation API key held on the server, not a personal CLI login.
+1. ~~Drop the Claude Code engine for the chat.~~ Done for Gemini (see "The API loop"). A Claude Messages API adapter would be one more provider object in `ai.js`.
 2. **Users and storage:** SSO login, per-user/team projects in a database instead of `~/.voltbridge`, per-user rate/usage limits. HTTPS, with IT/security approval.
 3. **Collaboration:** replace whole-sheet last-writer-loses with op-based sync (the `applyOps` ops are a good starting vocabulary), or a CRDT.
 4. **Other AI assistants:** expose `makeTools` as a standalone remote MCP server (streamable HTTP + OAuth). The model is server-side already, so Claude Desktop, Claude Code or other agents could draw without the web chat.
@@ -152,7 +166,7 @@ The current design is only safe for one person on their own machine. To host it:
 ## Hosted deployment (interim, no accounts yet)
 
 - `Dockerfile` (Node 22 + DejaVu fonts, builds `dist/`), `render.yaml` (Render blueprint, auto-deploy once CI passes), `.github/workflows/ci.yml` (`npm test` + UI build on pushes and PRs).
-- Off loopback (`HOST=0.0.0.0`, set by the Dockerfile) the server needs `VOLTBRIDGE_TOKEN`, **turns chat off** (`CHAT` in server.js; `VOLTBRIDGE_CHAT=1` overrides, only for a trusted private machine), ignores a client-supplied working folder and refuses the `outDir` message. `/healthz` is the only unauthenticated path.
+- Off loopback (`HOST=0.0.0.0`, set by the Dockerfile) the server needs `VOLTBRIDGE_TOKEN`, uses the Gemini provider (the Claude Code engine stays off: `VOLTBRIDGE_CHAT=1` with `VOLTBRIDGE_PROVIDER=claude` overrides, only for a trusted private machine; `CHAT` in server.js), ignores a client-supplied working folder and refuses the `outDir` message. `/healthz` is the only unauthenticated path.
 - Projects live in `VOLTBRIDGE_SESSIONS` (`/data/sessions` in the image). Without a persistent disk mounted there they vanish on redeploy.
 - Everyone with the token shares the same sessions. Real per-user storage and login come later.
 

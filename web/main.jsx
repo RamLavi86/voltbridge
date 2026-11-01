@@ -206,8 +206,8 @@ function App() {
       </header>
       <div className="main">
         <section className={`left ${chatOpen ? '' : 'hidden'}`} style={{ width: leftW }}>
-          <Chat chat={chat} busy={busy} onExample={setDraft} />
-          <Composer busy={busy} send={sendChat} stop={() => tx({ t: 'stop' })} draft={draft} clearDraft={() => setDraft(null)} />
+          <Chat chat={chat} busy={busy} onExample={setDraft} ai={hello.assistant || 'Claude'} />
+          <Composer ai={hello.assistant || 'Claude'} busy={busy} send={sendChat} stop={() => tx({ t: 'stop' })} draft={draft} clearDraft={() => setDraft(null)} />
         </section>
         {chatOpen && <div className="splitter" onPointerDown={startDrag} />}
         <section className="right">
@@ -310,7 +310,7 @@ function SessionPicker({ hello, sess, tx, err, setErr }) {
   );
 }
 
-function Chat({ chat, busy, onExample }) {
+function Chat({ chat, busy, onExample, ai }) {
   const end = useRef(null);
   useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [chat, busy]);
   const groups = [];
@@ -324,8 +324,8 @@ function Chat({ chat, busy, onExample }) {
       {chat.length === 0 && (
         <div className="hero">
           <Logo s={40} />
-          <h2>Draw schematics with Claude</h2>
-          <p>Ask Claude to draw or check a circuit, or paste a photo of a schematic to make it editable. You can edit everything by hand too.</p>
+          <h2>Draw schematics with {ai}</h2>
+          <p>Ask {ai} to draw or check a circuit, or paste a photo of a schematic to make it editable. You can edit everything by hand too.</p>
           <div className="examples">{EXAMPLES.map((x) => <button key={x} onClick={() => onExample(x)}>{x}</button>)}</div>
         </div>
       )}
@@ -346,7 +346,7 @@ function Chat({ chat, busy, onExample }) {
       ) : (
         <Markdown key={i} text={g.text} live={streaming && i === groups.length - 1} />
       )))}
-      {busy && !streaming && <div className="typing" aria-label="Claude is working"><i /><i /><i /></div>}
+      {busy && !streaming && <div className="typing" aria-label={`${ai} is working`}><i /><i /><i /></div>}
       <div ref={end} />
     </div>
   );
@@ -356,7 +356,7 @@ function Markdown({ text, live }) {
   return <div className={`msg assistant md ${live ? 'live' : ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-function Composer({ busy, send: sendMsg, stop, draft, clearDraft }) {
+function Composer({ ai, busy, send: sendMsg, stop, draft, clearDraft }) {
   const [input, setInput] = useState('');
   const [imgs, setImgs] = useState([]);
   const [drag, setDrag] = useState(false);
@@ -378,13 +378,13 @@ function Composer({ busy, send: sendMsg, stop, draft, clearDraft }) {
       {drag && <div className="dropzone">Drop image to attach</div>}
       {imgs.length > 0 && <div className="pending">{imgs.map((im, i) => (
         <span key={im.url} className="thumb"><img src={im.url} alt="attachment" /><button title="Remove" onClick={() => setImgs(imgs.filter((_, j) => j !== i))}><Icon n="x" s={11} /></button></span>))}</div>}
-      <textarea ref={ta} rows={1} value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask Claude to draw, check or explain a circuit..."
+      <textarea ref={ta} rows={1} value={input} onChange={(e) => setInput(e.target.value)} placeholder={`Ask ${ai} to draw, check or explain a circuit...`}
         onPaste={(e) => { if ([...e.clipboardData.files].some((f) => IMG_TYPES.includes(f.type))) { e.preventDefault(); addImages(e.clipboardData.files); } }}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
       <div className="cbar">
         <button className="iconbtn" title="Attach image" onClick={() => file.current.click()}><Icon n="clip" /></button>
         <input ref={file} type="file" accept={IMG_TYPES.join(',')} multiple hidden onChange={(e) => { addImages(e.target.files); e.target.value = ''; }} />
-        <span className="hint">Enter to send · Claude sees the open sheet and your selection</span>
+        <span className="hint">Enter to send · {ai} sees the open sheet and your selection</span>
         {busy ? <button className="sendbtn stop" onClick={stop} title="Stop"><Icon n="stop" /></button>
           : <button className="sendbtn" onClick={send} disabled={!input.trim() && !imgs.length} title="Send"><Icon n="send" /></button>}
       </div>

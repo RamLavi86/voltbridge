@@ -191,5 +191,76 @@ await ok('session round trip and revision conflicts', () => {
   assert.equal(t.docs[1].rev, rev + 1);
 });
 
+// ---------- the API loop (ai.js) against a scripted fake Gemini ----------
+const ai = await import('./ai.js');
+const http = await import('node:http');
+
+await ok('tool schemas fit Gemini: no property-less objects, free-form args as JSON strings', () => {
+  const tl = ai.apiTools(lib.toolDefs(s, ctx));
+  const walk = (n, where) => {
+    if (n.type === 'object') { assert.ok(Object.keys(n.properties || {}).length, `${where}: object without properties`); for (const [k, v] of Object.entries(n.properties)) walk(v, `${where}.${k}`); }
+    if (n.items) walk(n.items, `${where}[]`);
+    assert.ok(!('additionalProperties' in n) && !('$schema' in n), `${where}: unsupported keyword`);
+  };
+  for (const t of tl) if (t.parameters) walk(t.parameters, t.name);
+  const edit = tl.find((t) => t.name === 'edit_sheet');
+  assert.equal(edit.parameters.properties.ops.type, 'string');
+  assert.deepEqual(edit.parameters.required.sort(), ['ops', 'sheet']);
+  assert.deepEqual(edit.decode({ sheet: '1', ops: '[{"op":"add","x":1}]' }).ops, [{ op: 'add', x: 1 }]);
+  assert.equal(tl.find((t) => t.name === 'list_sheets').parameters, undefined, 'tools without arguments declare none');
+});
+
+await ok('agent loop: tools, replayed thought signatures, image fallback, split SSE events', async () => {
+  const s2 = lib.openSession('t2', tmp);
+  const bodies = [], headers = [];
+  const sse = (parts) => `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts } }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 } })}\n\n`;
+  const fake = http.createServer((req, res) => {
+    let b = ''; req.on('data', (d) => { b += d; }).on('end', async () => {
+      const body = JSON.parse(b); bodies.push(body); headers.push(req.headers['x-goog-api-key'] + ' ' + req.url);
+      const n = bodies.length;
+      const lastParts = body.contents.at(-1).parts;
+      if (n === 4 && lastParts.some((p) => p.inlineData)) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'no images here' } })); }
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (n === 1) res.end(sse([{ text: 'Looking. ' }, { functionCall: { name: 'list_sheets', args: {} }, thoughtSignature: 'sig1' }]));
+      else if (n === 2) res.end(sse([{ functionCall: { name: 'edit_sheet', args: { sheet: '1', ops: JSON.stringify([{ op: 'add', sym: 'resistor', x: 100, y: 100 }]) } } }]));
+      else if (n === 3) res.end(sse([{ functionCall: { name: 'snapshot', args: { sheet: '1', width: 400 } } }]));
+      else { const e = sse([{ text: 'Done.' }]); res.write(e.slice(0, 40)); await new Promise((r) => setTimeout(r, 20)); res.end(e.slice(40)); }
+    });
+  });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  try {
+    const text = [], seen = [];
+    s2.chat.push({ role: 'user', text: 'draw a resistor', ctx: '[voltbridge] test\n\n', images: [] });
+    const usage = await ai.runAgent({
+      provider: ai.geminiProvider({ apiKey: 'k', baseUrl: `http://127.0.0.1:${fake.address().port}` }),
+      system: 'sys', messages: s2.chat, tools: ai.apiTools(lib.toolDefs(s2, { sheetChanged() {}, sheetsChanged() {}, exported() {} })), imageDir: tmp,
+      onText: (t) => text.push(t), onTool: (c) => seen.push(c.name),
+    });
+    assert.equal(text.join(''), 'Looking. Done.');
+    assert.deepEqual(seen, ['list_sheets', 'edit_sheet', 'snapshot']);
+    assert.ok(s2.docs[1].parts.some((p) => p.sym === 'resistor'), 'edit_sheet ran with its JSON-string ops');
+    assert.deepEqual(s2.chat.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant', 'tool', 'assistant', 'tool', 'assistant']);
+    assert.deepEqual(usage, { prompt: 40, output: 20 }, 'four answered steps; the rejected request adds nothing');
+    assert.equal(headers[0], 'k /v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse', 'key goes in a header, not the URL');
+    assert.ok(bodies[0].tools[0].functionDeclarations.some((d) => d.name === 'edit_sheet'));
+    assert.equal(bodies[0].contents[0].parts.at(-1).text, '[voltbridge] test\n\ndraw a resistor');
+    assert.equal(bodies[1].contents[1].parts[1].thoughtSignature, 'sig1', 'model parts are replayed as received');
+    assert.equal(bodies[1].contents[2].parts[0].functionResponse.name, 'list_sheets');
+    assert.ok(bodies[3].contents.at(-1).parts.some((p) => p.inlineData), 'first try sends the snapshot');
+    assert.ok(!bodies[4].contents.at(-1).parts.some((p) => p.inlineData), 'after a 400 it retries without images');
+    lib.saveChat(s2);
+    const saved = fs.readFileSync(path.join(s2.dir, 'chat.json'), 'utf8');
+    assert.ok(!saved.includes('"shots"') && lib.openSession('t2', tmp).chat.length === 8, 'chat is saved without tool images and reloads');
+  } finally { fake.close(); }
+});
+
+await ok('a rejected API key gives a clear error', async () => {
+  const fake = http.createServer((req, res) => { req.resume().on('end', () => { res.writeHead(403, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'API key not valid' } })); }); });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  try {
+    await assert.rejects(ai.runAgent({ provider: ai.geminiProvider({ apiKey: 'bad', baseUrl: `http://127.0.0.1:${fake.address().port}` }), system: 's', messages: [{ role: 'user', text: 'hi' }], tools: [], imageDir: tmp }), /GEMINI_API_KEY/);
+  } finally { fake.close(); }
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`${n} passed${process.exitCode ? ', some FAILED' : ''}`);
