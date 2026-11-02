@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signing in - Voltbridge</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 16px/1.6 system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; padding: 0 16px; text-align: center; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<p id="msg">Signing you in...</p>
+<script>
+  // Supabase sends the user back with the tokens in the URL fragment; trade the access token for our own cookie.
+  (async () => {
+    const msg = document.getElementById('msg');
+    const h = new URLSearchParams(location.hash.slice(1));
+    const fail = (t) => { msg.innerHTML = ''; msg.append(t + ' ', Object.assign(document.createElement('a'), { href: '/', textContent: 'Back to sign in' })); };
+    const token = h.get('access_token');
+    if (!token) return fail(h.get('error_description') || 'Sign-in did not finish.');
+    history.replaceState(null, '', location.pathname); // keep the token out of the address bar and history
+    try {
+      const r = await fetch('/auth/session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ access_token: token }) });
+      if (r.ok) location.replace('/');
+      else fail((await r.json().catch(() => ({}))).error || 'Sign-in was not accepted.');
+    } catch { fail('Could not reach the server.'); }
+  })();
+</script>
+</body>
+</html>

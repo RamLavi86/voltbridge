@@ -19,7 +19,7 @@ npm test               # model, tools, sessions; writes test-out/sheet*.png
 | var | default | |
 |---|---|---|
 | `PORT` | `8430` | |
-| `HOST` | `127.0.0.1` | Off loopback a token is required (`~/.voltbridge/token` or `VOLTBRIDGE_TOKEN`). |
+| `HOST` | `127.0.0.1` | Off loopback you must sign in: Google through Supabase when `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are set (see docs/DEVELOPING.md), otherwise a shared token (`~/.voltbridge/token` or `VOLTBRIDGE_TOKEN`). |
 | `VOLTBRIDGE_CWD` | `~/ioe`, else home | Working folder for new projects. |
 | `VOLTBRIDGE_SESSIONS` | `~/.voltbridge/sessions` | Where projects are stored. |
 

@@ -46,6 +46,8 @@ input:focus, select:focus { border-color: var(--accent); outline: none; box-shad
 .brand { font-weight: 600; letter-spacing: -.01em; }
 .slash { color: var(--border-2); }
 .cwd { color: var(--muted); font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.linkbtn { background: none; border: 0; padding: 0 6px; font: inherit; font-size: 12px; color: var(--muted); text-decoration: underline; cursor: pointer; }
+.linkbtn:hover { color: var(--text, inherit); }
 .conn { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .conn::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
 .conn.on::before { background: var(--ok); }

@@ -333,5 +333,79 @@ await ok('OpenRouter: image fallback, key, credits and missing model errors', as
   assert.throws(() => ai.openrouterProvider({ apiKey: 'k' }), /OPENROUTER_MODEL/);
 });
 
+
+// ---------- sign-in and caps (auth.js) against a fake Supabase ----------
+const { createAuth, costOf } = await import('./auth.js');
+
+async function fakeSupabase(state) {
+  const srv = http.createServer((req, res) => { let b = ''; req.on('data', (d) => { b += d; }).on('end', () => {
+    const u = new URL(req.url, 'http://x');
+    const out = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(body === undefined ? '' : JSON.stringify(body)); };
+    state.calls.push(`${req.method} ${u.pathname} ${req.headers.apikey}`);
+    if (state.down) return out(500, { message: 'down' });
+    if (u.pathname === '/auth/v1/user') {
+      const t = /^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1];
+      return t === 'good' ? out(200, { id: 'u1', email: 'Ann@Example.com', email_confirmed_at: '2026-11-01' })
+        : t === 'unverified' ? out(200, { id: 'u2', email: 'bob@example.com' }) : out(401, { msg: 'bad jwt' });
+    }
+    if (u.pathname === '/rest/v1/allowed_emails') { const e = decodeURIComponent(u.searchParams.get('email').slice(3)); return out(200, state.allowed[e] != null ? [{ monthly_cap_usd: state.allowed[e] }] : []); }
+    if (u.pathname === '/rest/v1/rpc/month_spend') return out(200, state.spent);
+    if (u.pathname === '/rest/v1/rpc/month_spend_all') return out(200, state.all);
+    if (u.pathname === '/rest/v1/usage') { state.usage.push(JSON.parse(b)); return out(201); }
+    out(404, {});
+  }); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  return { url: `http://127.0.0.1:${srv.address().port}`, close: () => srv.close() };
+}
+
+await ok('sign-in: token check, signed cookie (forged and expired ones refused)', async () => {
+  const state = { calls: [], allowed: {}, spent: 0, all: 0, usage: [] };
+  const sb = await fakeSupabase(state);
+  let t = 1000000;
+  const a = createAuth({ url: sb.url, serviceKey: 'svc', now: () => t });
+  try {
+    assert.deepEqual(await a.login('good'), { id: 'u1', email: 'ann@example.com' }, 'email is lower-cased');
+    await assert.rejects(a.login('nope'), /not accepted/);
+    await assert.rejects(a.login('unverified'), /verified email/);
+    const v = a.sign({ id: 'u1', email: 'ann@example.com' });
+    assert.deepEqual(a.read(`x=1; vb=${v}`), { id: 'u1', email: 'ann@example.com' });
+    const [body, tag] = v.split('.');
+    const forged = Buffer.from(JSON.stringify({ id: 'u9', email: 'evil@x.com', exp: t + 1e9 })).toString('base64url');
+    assert.equal(a.read(`vb=${forged}.${tag}`), null, 'a changed body does not verify');
+    assert.equal(a.read(`vb=${body}.${tag.slice(1)}x`), null);
+    assert.equal(createAuth({ url: sb.url, serviceKey: 'other', now: () => t }).read(`vb=${v}`), null, 'another server key does not verify it');
+    assert.equal(a.read(''), null);
+    t += 8 * 86400000;
+    assert.equal(a.read(`vb=${v}`), null, 'expires after 7 days');
+    assert.ok(state.calls.every((c) => c.endsWith(' svc')), 'every call carries the service key header');
+  } finally { sb.close(); }
+});
+
+await ok('caps: per user, whole server, custom allowance, closed signup, Supabase down', async () => {
+  const state = { calls: [], allowed: { 'vip@example.com': 5, 'blocked@example.com': 0 }, spent: 0.2, all: 3, usage: [] };
+  const sb = await fakeSupabase(state);
+  const a = createAuth({ url: sb.url, serviceKey: 'svc', userCap: 0.5, globalCap: 10 });
+  const ann = { id: 'u1', email: 'ann@example.com' };
+  try {
+    assert.deepEqual(await a.limits(ann), { ok: true, cap: 0.5, spent: 0.2 });
+    state.spent = 0.5;
+    assert.match((await a.limits(ann)).reason, /allowance for this month \(\$0\.50\)/);
+    assert.deepEqual(await a.limits({ id: 'u3', email: 'vip@example.com' }), { ok: true, cap: 5, spent: 0.5 }, 'a listed email gets its own cap');
+    assert.equal((await a.limits({ id: 'u4', email: 'blocked@example.com' })).ok, false, 'cap 0 blocks');
+    state.spent = 0; state.all = 10;
+    assert.match((await a.limits(ann)).reason, /budget for this month/, 'the server-wide cap stops everyone');
+    state.all = 0;
+    assert.equal((await createAuth({ url: sb.url, serviceKey: 'svc', open: false }).limits(ann)).ok, false, 'closed signup needs a listed email');
+    assert.equal((await createAuth({ url: sb.url, serviceKey: 'svc', open: false }).limits({ id: 'u3', email: 'vip@example.com' })).ok, true);
+    await a.record(ann, { model: 'm', prompt: 100, output: 20, cost: 0.01 });
+    assert.deepEqual(state.usage, [{ user_id: 'u1', email: 'ann@example.com', model: 'm', tokens_in: 100, tokens_out: 20, cost_usd: 0.01 }]);
+    state.down = true;
+    const r = await a.limits(ann);
+    assert.ok(!r.ok && /Could not check/.test(r.reason), 'fails closed');
+    await a.record(ann, { model: 'm' }); // a failed write is logged, not thrown
+  } finally { sb.close(); }
+  assert.equal(costOf({ prompt: 1000000, output: 1000000, cost: 0.3 }), 0.3);
+  assert.equal(costOf({ prompt: 1000000, output: 1000000 }), 6, 'without a reported cost, a high estimate is used');
+});
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`${n} passed${process.exitCode ? ', some FAILED' : ''}`);
