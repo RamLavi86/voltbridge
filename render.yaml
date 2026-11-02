@@ -8,3 +8,7 @@ services:
     envVars:
       - key: VOLTBRIDGE_TOKEN
         generateValue: true # open https://<service>.onrender.com/?token=<value> once; read the value in the Render dashboard
+      - key: OPENROUTER_API_KEY
+        sync: false # secret: paste it in the Render dashboard (Environment tab), never in this file
+      - key: OPENROUTER_MODEL
+        sync: false # a model id that supports tools, from https://openrouter.ai/models?supported_parameters=tools

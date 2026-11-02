@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { query, getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import * as lib from './lib.js';
+import * as ai from './ai.js';
+
+// Settings such as OPENROUTER_API_KEY can live in a git-ignored .env next to this file; real environment variables win.
+try { process.loadEnvFile(fileURLToPath(new URL('./.env', import.meta.url))); } catch { /* no .env */ }
 
 // The SDK can reject an internal promise after a failed turn; chat() already reported it, so don't let Node die.
 process.on('unhandledRejection', (e) => console.error('[unhandled]', e?.message || e));
@@ -23,9 +27,15 @@ const LOCAL = ['127.0.0.1', 'localhost', '::1'].includes(HOST);
 const tokenFile = path.join(lib.HOME, 'token');
 const TOKEN = LOCAL ? null : process.env.VOLTBRIDGE_TOKEN || (fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, 'utf8').trim()
   : (fs.mkdirSync(lib.HOME, { recursive: true }), fs.writeFileSync(tokenFile, crypto.randomBytes(18).toString('base64url'), { mode: 0o600 }), fs.readFileSync(tokenFile, 'utf8')));
-// Claude here has Bash and file access with no prompts, so off loopback chat stays off unless VOLTBRIDGE_CHAT=1,
-// and clients can't pick the working or output folders on the server's disk.
-const CHAT = LOCAL || process.env.VOLTBRIDGE_CHAT === '1';
+// Who answers the chat. 'claude' is the Claude Code engine: Bash and file access with no prompts, so local only.
+// 'openrouter' calls an API with just the voltbridge tools (ai.js), which is what a hosted server uses.
+const PROVIDER = process.env.VOLTBRIDGE_PROVIDER || (LOCAL ? 'claude' : 'openrouter');
+const PROVIDERS = { claude: { name: 'Claude' }, openrouter: { name: 'OpenRouter', key: 'OPENROUTER_API_KEY', model: 'OPENROUTER_MODEL' } };
+if (!PROVIDERS[PROVIDER]) throw new Error(`VOLTBRIDGE_PROVIDER must be one of ${Object.keys(PROVIDERS).join(', ')}, not "${PROVIDER}"`);
+const ASSISTANT = PROVIDERS[PROVIDER].name;
+const KEY_VAR = PROVIDERS[PROVIDER].key;
+// Off loopback the Claude engine stays off unless VOLTBRIDGE_CHAT=1, and clients can't pick the working or output folders on the server's disk.
+const CHAT = LOCAL || PROVIDER !== 'claude' || process.env.VOLTBRIDGE_CHAT === '1';
 const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const authed = (req) => !TOKEN || same(/(?:^|;\s*)vb=([^;]+)/.exec(req.headers.cookie || '')?.[1], TOKEN);
 
@@ -44,7 +54,8 @@ const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   const p = decodeURIComponent(u.pathname);
   if (p === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
-  if (TOKEN && same(u.searchParams.get('token'), TOKEN)) {
+  // a '+' in the query reads as a space, and base64 tokens contain '+'
+  if (TOKEN && same(u.searchParams.get('token')?.replaceAll(' ', '+'), TOKEN)) {
     res.writeHead(302, { 'Set-Cookie': `vb=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`, Location: '/' });
     return res.end();
   }
@@ -76,7 +87,14 @@ How to draw well:
 - Issues include text overlaps ("Q5 text ... overlaps Q6"): widen spacing or set props.labelPos "below".
 - After a batch, read the issues in the edit_sheet result and take a snapshot to check the drawing; fix overlaps, dangling pins and crossing text before you finish.
 When the user pastes an image of a schematic, recreate it as an editable schematic (a new sheet unless told otherwise), keeping refs, values and topology.`;
-const DEFAULT_IMAGE_ASK = 'Recreate this image as an editable schematic on a new sheet.';
+// Every API request carries the prompt, so the symbol library goes in here once (no list_symbols step) and each user message names the sheets.
+const API_PROMPT = `${PROMPT.replace('Call list_symbols once to learn symbol keys, pin names and pin offsets before placing parts.', 'Use the symbol keys, pin names and pin offsets listed below when placing parts.')}
+You act only through the voltbridge tools: you have no shell and no file access. Each user message starts with [voltbridge] lines giving the sheets, the sheet the user is looking at and their selection, so you do not need list_sheets or list_symbols: start from get_sheet when you need what is already drawn, and call it again only after you changed the sheet.
+If edit_sheet reports errors or issues, fix them and look again before you answer. End with a short summary of what you drew or changed.
+
+Symbol library:
+${lib.symbolText()}`;
+const DEFAULT_IMAGE_ASK ='Recreate this image as an editable schematic on a new sheet.';
 
 const live = new Map();
 const send = (ws, m) => ws.readyState === 1 && ws.send(JSON.stringify(m));
@@ -110,15 +128,18 @@ const imgUrls = (s, line) => line.slice(IMG_LINE.length).split(', ').map((f) => 
 
 async function chat(s, text, images = [], sheetId, selection = []) {
   if (!CHAT) return broadcast(s, { t: 'error', text: 'Chat is turned off on this server. The schematic editor works as usual.' });
-  if (s.q) return broadcast(s, { t: 'error', text: 'Claude is still working; press Stop first.' });
+  if (s.q) return broadcast(s, { t: 'error', text: `${ASSISTANT} is still working; press Stop first.` });
+  if (PROVIDER !== 'claude' && !process.env[KEY_VAR]) return broadcast(s, { t: 'error', text: `${KEY_VAR} is not set on the server, so chat cannot run.` });
+  if (PROVIDER === 'openrouter' && !process.env.OPENROUTER_MODEL) return broadcast(s, { t: 'error', text: 'OPENROUTER_MODEL is not set on the server, so chat cannot run.' });
   const files = images.length ? lib.saveImages(s, images) : [];
   text = text.trim() || (files.length ? DEFAULT_IMAGE_ASK : '');
   if (!text) return;
   let prefix = `[voltbridge] output folder for exports: ${s.outDir}\n`;
   const doc = s.docs[sheetId];
   if (doc) prefix += `[voltbridge] the user is looking at sheet ${doc.id} "${doc.name}"${selection.length ? `, with selected: ${selection.join(', ')}` : ''}\n`;
-  if (files.length) prefix += IMG_LINE + files.map((f) => path.join(s.dir, 'images', f)).join(', ') + '\n';
   broadcast(s, { t: 'user', text, images: files.length ? imgUrls(s, IMG_LINE + files.join(', ')) : [] });
+  if (PROVIDER !== 'claude') return chatApi(s, text, `${lib.sheetsSummary(s)}\n${prefix}\n`, files);
+  if (files.length) prefix += IMG_LINE + files.map((f) => path.join(s.dir, 'images', f)).join(', ') + '\n';
   const content = [...images.map((img) => ({ type: 'image', source: { type: 'base64', media_type: img.mime, data: img.data } })), { type: 'text', text: `${prefix}\n${text}` }];
   const prompt = files.length ? (async function* () { yield { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null }; })() : content.at(-1).text;
   try {
@@ -154,7 +175,46 @@ async function chat(s, text, images = [], sheetId, selection = []) {
   }
 }
 
+// The API path: our own transcript (s.chat, saved as chat.json) and the loop in ai.js.
+let apiProvider; // shared, so what it learns about the model (no images in tool turns) lasts
+const getProvider = () => (apiProvider ||= ai.openrouterProvider({
+  apiKey: process.env.OPENROUTER_API_KEY, model: process.env.OPENROUTER_MODEL, baseUrl: process.env.OPENROUTER_BASE_URL || undefined,
+  fallbacks: (process.env.OPENROUTER_FALLBACKS || '').split(',').map((x) => x.trim()).filter(Boolean),
+  dataCollection: process.env.OPENROUTER_DATA_COLLECTION === 'allow' ? 'allow' : 'deny',
+}));
+async function chatApi(s, text, ctx, files) {
+  const ac = new AbortController();
+  s.q = { interrupt: () => ac.abort() };
+  const save = () => { if (!s.deleted) lib.saveChat(s); };
+  try {
+    s.chat.push({ role: 'user', text, ctx, images: files });
+    save();
+    const usage = await ai.runAgent({
+      provider: getProvider(),
+      system: API_PROMPT,
+      messages: s.chat,
+      tools: ai.apiTools(lib.toolDefs(s, ctxFor(s))),
+      signal: ac.signal,
+      imageDir: path.join(s.dir, 'images'),
+      onText: (t) => broadcast(s, { t: 'delta', text: t }),
+      onTool: (c) => broadcast(s, { t: 'tool', id: c.id, name: c.name, input: JSON.stringify(c.args).slice(0, 200) }),
+      onToolDone: (c, r) => broadcast(s, { t: 'tool_done', id: c.id, error: r.isError }),
+      onMessage: save,
+    });
+    console.log(`[${s.name}] ${getProvider().model}: ${usage.prompt} tokens in, ${usage.output} out${usage.cost != null ? `, $${usage.cost.toFixed(4)}` : ''}`);
+  } catch (e) {
+    if (!ac.signal.aborted) broadcast(s, { t: 'error', text: String(e.message || e) });
+  } finally {
+    s.q = null;
+    broadcast(s, { t: 'done' });
+  }
+}
+
 async function history(s) {
+  if (PROVIDER !== 'claude') {
+    return s.chat.flatMap((m) => (m.role === 'user' ? [{ role: 'user', text: m.text, images: (m.images || []).map((f) => `/img/${encodeURIComponent(s.name)}/${f}`) }]
+      : m.role === 'assistant' ? [...(m.text ? [{ role: 'assistant', text: m.text }] : []), ...(m.calls || []).map((c) => ({ role: 'tool', name: c.name }))] : []));
+  }
   if (!s.claudeSessionId) return [];
   const out = [];
   for (const m of await getSessionMessages(s.claudeSessionId, { dir: s.cwd }).catch(() => [])) {
@@ -176,7 +236,7 @@ const allSessions = () => { const m = sessionsMsg(); wss.clients.forEach((c) => 
 const wss = new WebSocketServer({ server, path: '/ws', verifyClient: ({ req }) => authed(req), maxPayload: 32 * 1024 * 1024 });
 wss.on('connection', (ws) => {
   let s = null;
-  send(ws, { ...sessionsMsg(), t: 'hello', cwd: CWD });
+  send(ws, { ...sessionsMsg(), t: 'hello', cwd: CWD, assistant: ASSISTANT });
   ws.on('message', async (raw) => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     try {
@@ -220,5 +280,5 @@ wss.on('connection', (ws) => {
   ws.on('close', () => s?.clients.delete(ws));
 });
 
-server.listen(PORT, HOST, () => console.log(`voltbridge on http://${HOST}:${PORT}  (default cwd ${CWD})` +
-  (TOKEN ? `\n  open once from another machine: http://${os.hostname()}:${PORT}/?token=${TOKEN}` : '')));
+server.listen(PORT, HOST, () => console.log(`voltbridge on http://${HOST}:${PORT}  (default cwd ${CWD})\n  chat: ${CHAT ? `${ASSISTANT}${PROVIDER !== 'claude' ? ` (${process.env[PROVIDERS[PROVIDER].model] || 'OPENROUTER_MODEL missing'}${process.env[KEY_VAR] ? '' : `, ${KEY_VAR} missing`})` : ''}` : 'off'}` +
+  (TOKEN && !process.env.VOLTBRIDGE_TOKEN ? `\n  open once from another machine: http://${os.hostname()}:${PORT}/?token=${TOKEN}` : '')));

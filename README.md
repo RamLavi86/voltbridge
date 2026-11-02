@@ -23,6 +23,8 @@ npm test               # model, tools, sessions; writes test-out/sheet*.png
 | `VOLTBRIDGE_CWD` | `~/ioe`, else home | Working folder for new projects. |
 | `VOLTBRIDGE_SESSIONS` | `~/.voltbridge/sessions` | Where projects are stored. |
 
+**OpenRouter instead of Claude.** Set `OPENROUTER_API_KEY` (https://openrouter.ai/keys) and `OPENROUTER_MODEL`, the id of a model that supports tools (https://openrouter.ai/models?supported_parameters=tools), in a git-ignored `.env` (see `.env.example`) or the host environment, and start with `VOLTBRIDGE_PROVIDER=openrouter`. The model then only has the voltbridge tools, with no shell or file access. A hosted server (`HOST` not loopback) uses OpenRouter automatically. Prompts go only to providers that do not store them or train on them, unless you set `OPENROUTER_DATA_COLLECTION=allow`.
+
 ## Editor
 
 - **Palette** (left of the canvas): symbols by category, with search. Click one, then click on the sheet to place it (repeatedly; R rotates the ghost, Esc or right-click stops).
