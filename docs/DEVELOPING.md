@@ -184,3 +184,7 @@ The current design is only safe for one person on their own machine. To host it:
 ## Git
 
 Local repository only, no remote. Commits: `591a1f2` initial app, `62e344e` distribution boards (multi-pole devices, pole marking, loads, circuit props/table, ref prefixes, RTL text, array op, overlap check). The original feature requests are in `~/ioe/schematics/voltbridge-dev-requests.md`.
+
+## Saved projects on a hosted server
+
+The hosted server's disk is lost on every restart, so `store.js` mirrors each signed-in user's session folders into the Supabase table `user_files` (create it with `docs/user_files.sql`). On a user's first request after a start their projects are restored before anything is served; changes are copied every 8 seconds, when their browser closes and on SIGTERM. Export folders are not stored. If the table is missing the app still works but nothing persists; the log shows `[store]` lines. Pushing stays off for a user until a restore has worked, so an empty disk never overwrites saved work.
