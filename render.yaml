@@ -12,3 +12,8 @@ services:
         sync: false # secret: paste it in the Render dashboard (Environment tab), never in this file
       - key: OPENROUTER_MODEL
         sync: false # a model id that supports tools, from https://openrouter.ai/models?supported_parameters=tools
+      - key: SUPABASE_URL
+        sync: false # https://<project>.supabase.co; with the key below it turns on Google sign-in and the monthly caps
+      - key: SUPABASE_SERVICE_KEY
+        sync: false # secret (Supabase service_role key): Render's Environment tab only, never in this file or the browser
+      # Optional, in dollars per UTC month: USER_MONTHLY_CAP_USD (default 0.5), GLOBAL_MONTHLY_CAP_USD (default 10); OPEN_SIGNUP=false limits sign-in to emails in the allowed_emails table

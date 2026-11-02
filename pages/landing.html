@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voltbridge</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --fg: #1b1f24; --mute: #5b6470; --line: #d8dde3; --accent: #1b5fd6; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #14171a; --fg: #e7eaee; --mute: #98a1ad; --line: #2c333a; --accent: #6ea0ff; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, sans-serif; }
+  main { max-width: 34rem; margin: 0 auto; padding: 4rem 16px; }
+  h1 { font-size: 2rem; margin: 0 0 .25rem; }
+  p { margin: .6rem 0; }
+  .mute { color: var(--mute); }
+  .btn { display: inline-block; margin: 1.5rem 0 .5rem; padding: .7rem 1.2rem; border-radius: 8px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+  @media (prefers-color-scheme: dark) { .btn { color: #0b1220; } }
+  footer { border-top: 1px solid var(--line); margin-top: 3rem; padding-top: 1rem; font-size: .9rem; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voltbridge</h1>
+  <p class="mute">Sketch electrical schematics by talking to an AI assistant.</p>
+  <p>Describe a motor starter, a distribution board or paste a photo of a drawing. Voltbridge draws it as an editable schematic with IEC symbols, checks it for problems, and can export it.</p>
+  <a class="btn" href="/auth/google">Sign in with Google</a>
+  <p class="mute">Each account has a small monthly allowance. Drawings can contain mistakes: never build from one without review by a qualified electrician.</p>
+  <footer><a href="/privacy">Privacy policy</a> · <a href="/terms">Terms of service</a></footer>
+</main>
+</body>
+</html>

@@ -199,9 +199,10 @@ function App() {
         </button>
         <Logo /><span className="brand">voltbridge</span><span className="slash">/</span>
         <SessionPicker hello={hello} sess={sess} tx={tx} err={sessErr} setErr={setSessErr} />
-        <span className="cwd" title={sess?.cwd}>{sess?.cwd}</span>
+        {!hello.user && <span className="cwd" title={sess?.cwd}>{sess?.cwd}</span>}
         <span className="grow" />
         <span className={`conn ${conn ? 'on' : ''}`}>{conn ? 'connected' : 'offline'}</span>
+        {hello.user && <button className="linkbtn" title={`Signed in as ${hello.user}`} onClick={() => fetch('/auth/logout', { method: 'POST' }).then(() => location.reload())}>Sign out</button>}
         <button className="iconbtn" onClick={theme_} title="Light / dark"><Icon n={theme === 'dark' ? 'sun' : 'moon'} s={17} /></button>
       </header>
       <div className="main">

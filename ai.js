@@ -57,7 +57,7 @@ const adapt = (r) => ({
 // ---------- the loop ----------
 // messages (mutated, persisted by the caller): {role:'user', text, ctx?, images?: [file]} | {role:'assistant', text, calls, raw?}
 // | {role:'tool', results: [{id, name, text, isError, shots?}]}. shots (tool images) are kept in memory only.
-export async function runAgent({ provider, system, messages, tools, signal, onText, onTool, onToolDone, onMessage, imageDir, maxSteps = 25 }) {
+export async function runAgent({ provider, system, messages, tools, signal, onText, onTool, onToolDone, onMessage, onUsage, imageDir, maxSteps = 25 }) {
   const by = Object.fromEntries(tools.map((t) => [t.name, t]));
   const usage = { prompt: 0, output: 0 };
   for (let step = 0; step < maxSteps; step++) {
@@ -65,6 +65,7 @@ export async function runAgent({ provider, system, messages, tools, signal, onTe
     usage.prompt += r.usage?.prompt || 0;
     usage.output += r.usage?.output || 0;
     if (r.usage?.cost != null) usage.cost = (usage.cost || 0) + r.usage.cost; // credits spent, when the provider reports it
+    onUsage?.(r.usage || {}); // after every step, so a caller can meter (and stop) a run that later fails
     messages.push({ role: 'assistant', text: r.text, calls: r.calls, raw: r.raw });
     onMessage?.();
     if (!r.calls.length) return usage;

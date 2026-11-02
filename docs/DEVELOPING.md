@@ -15,7 +15,8 @@ Stack: Node 20.19+ (ESM, no TypeScript), `ws`, `@anthropic-ai/claude-agent-sdk`,
 | `web/schematic.js` | ~860 | **The model.** Symbol library, geometry, connectivity/nets, edit ops, designators, checks, BOM/netlist/circuits, SVG rendering, bidi text. Pure JS, no DOM: imported by both the server and the browser. Most work happens here. |
 | `lib.js` | ~200 | Session storage on disk, sheet CRUD, exports, and Claude's MCP tools (`makeTools`) with the ops reference text (`OPS_DOC`). No HTTP, so `test.js` drives it directly. |
 | `ai.js` | ~170 | The API chat loop: OpenRouter adapter (SSE streaming), tool declarations from the zod shapes, `runAgent`. |
-| `server.js` | ~260 | HTTP (static `dist/`, pasted images), token auth, WebSocket protocol, the Claude loop (`chat()`), the appended system prompt (`PROMPT`), chat history replay. |
+| `auth.js` | ~80 | Google sign-in through Supabase: token check, signed session cookie, monthly caps and usage log. |
+| `server.js` | ~330 | HTTP (static `dist/`, pasted images), sign-in routes and per-user sessions, WebSocket protocol, the Claude loop (`chat()`), the appended system prompt (`PROMPT`), chat history replay. |
 | `web/main.jsx` | ~400 | App shell: WebSocket client, per-sheet undo/redo and sync, sheet tabs, session picker, chat and composer. |
 | `web/editor.jsx` | ~300 | The canvas: pan/zoom, tools (select, wire, bus, net, text, rect, table, place symbol), drag/rotate/mirror, box select, clipboard. |
 | `web/panels.jsx` | ~250 | Palette, toolbar, inspector (part, wire, label, sheet properties, checks, net list), export menu, status bar. |
@@ -156,7 +157,7 @@ On Ram's VM it was run under a restart loop, `~/.voltbridge/run.sh` (HOST=0.0.0.
 - Manual (non-auto) tables can be created by Claude but not edited in the inspector.
 - Symbols are unverified against IEC 60617 (see above).
 - Undo is per window and lost on reload. The sync conflict policy replaces the local edit.
-- Single shared token, no user accounts.
+- Without Supabase configured, a single shared token and no user accounts (see "Hosted deployment").
 - JSON files rewritten whole on save. That's fine at this size.
 
 ## Taking it further (hosting for other people / other AI assistants)
@@ -169,12 +170,16 @@ The current design is only safe for one person on their own machine. To host it:
 4. **Other AI assistants:** expose `makeTools` as a standalone remote MCP server (streamable HTTP + OAuth). The model is server-side already, so Claude Desktop, Claude Code or other agents could draw without the web chat.
 5. If Claude ever needs to run code (calculations, cable sizing), give each user a sandbox, such as a hosted agent with a managed sandbox. Never use Bash on the host.
 
-## Hosted deployment (interim, no accounts yet)
+## Hosted deployment
 
 - `Dockerfile` (Node 22 + DejaVu fonts, builds `dist/`), `render.yaml` (Render blueprint, auto-deploy once CI passes), `.github/workflows/ci.yml` (`npm test` + UI build on pushes and PRs).
-- Off loopback (`HOST=0.0.0.0`, set by the Dockerfile) the server needs `VOLTBRIDGE_TOKEN`, uses the OpenRouter provider (the Claude Code engine stays off: `VOLTBRIDGE_CHAT=1` with `VOLTBRIDGE_PROVIDER=claude` overrides, only for a trusted private machine; `CHAT` in server.js), ignores a client-supplied working folder and refuses the `outDir` message. `/healthz` is the only unauthenticated path.
-- Projects live in `VOLTBRIDGE_SESSIONS` (`/data/sessions` in the image). Without a persistent disk mounted there they vanish on redeploy.
-- Everyone with the token shares the same sessions. Real per-user storage and login come later.
+- Off loopback (`HOST=0.0.0.0`, set by the Dockerfile) the server uses the OpenRouter provider (the Claude Code engine stays off: `VOLTBRIDGE_CHAT=1` with `VOLTBRIDGE_PROVIDER=claude` overrides, only for a trusted private machine; `CHAT` in server.js), ignores a client-supplied working folder and refuses the `outDir` message. Public without login: `/healthz`, `/privacy`, `/terms` (`pages/`, linked from Google's consent screen), and the sign-in routes.
+- **Sign-in (auth.js)** is on when `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are set; otherwise a hosted server falls back to the shared `VOLTBRIDGE_TOKEN` (one user, everything shared). Flow: `/` shows `pages/landing.html`; `/auth/google` redirects to Supabase's Google authorize URL; Supabase returns to `/auth/callback` (`pages/callback.html`) with the tokens in the URL fragment; the page POSTs the access token to `/auth/session`; `auth.login()` checks it against Supabase (`/auth/v1/user`, verified email required) and the server sets its own cookie `vb` (HMAC-signed id + email, HttpOnly, SameSite=Lax, 7 days; the key is derived from the service key). The browser never holds the service key. WebSocket upgrades need the cookie and a same-host `Origin`.
+- **Separation:** each user gets `VOLTBRIDGE_SESSIONS/u_<id>/` (`user.root`), passed as `root` to the `lib.js` session functions; live sessions are keyed `<id>/<name>`; session lists go only to that user's sockets; `/img/…` resolves inside the caller's folder. Exports go to `u_<id>/schematics`.
+- **Caps (dollars per UTC month):** `USER_MONTHLY_CAP_USD` (default 0.50) and `GLOBAL_MONTHLY_CAP_USD` (default 10). Before each API chat `auth.limits()` reads the user's usage (`month_spend`) and the server total (`month_spend_all`); a row in `allowed_emails` overrides that user's cap (0 blocks). `OPEN_SIGNUP=false` makes the list an allowlist. It fails closed if Supabase cannot be reached. While a run is going, `onUsage` meters each step (`costOf`: the reported cost, else a high token estimate) and aborts the run when the user's allowance is used up. Every chat is logged to `usage` even when it fails or is stopped. At most 6 chats per user per minute.
+- **Supabase setup** (SQL editor): tables `allowed_emails(email pk, monthly_cap_usd)` and `usage(user_id, email, model, tokens_in, tokens_out, cost_usd, created_at)` with row-level security on, functions `month_spend(uid)` and `month_spend_all()`, privileges granted to `service_role` only. Google provider on in Authentication → Providers, with `https://<project>.supabase.co/auth/v1/callback` as the Google redirect URI; Site URL = the app's URL, plus `http://127.0.0.1:8430` in the redirect list for local testing. Optional `PUBLIC_URL` overrides the origin used for the return address.
+- Projects live in `VOLTBRIDGE_SESSIONS` (`/data/sessions` in the image). Without a persistent disk mounted there they vanish on redeploy; storing them in Supabase is the next step.
+- `npm test` covers `auth.js` against a fake Supabase (cookie forgery and expiry, caps, fail-closed). The server-level flow (two users, isolation, caps, rate limit) was checked with a throwaway script that starts the real server against fake Supabase and OpenRouter servers; it is not in the repo.
 
 ## Git
 
