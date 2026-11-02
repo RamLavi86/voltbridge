@@ -8,7 +8,11 @@ const DAY = 86400000;
 // Options: url, serviceKey (Supabase), userCap / globalCap (dollars per calendar month, UTC), open (anyone with a Google account
 // may sign in; false = only emails listed in allowed_emails), secret (cookie signing; derived from the service key by default).
 export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, open = true, secret, fetchFn = fetch, now = Date.now }) {
-  url = url.replace(/\/$/, '');
+  // pasted values often carry a trailing newline or quotes, which Supabase answers with 401
+  const clean = (v) => String(v).trim().replace(/^["']|["']$/g, '').trim();
+  url = clean(url).replace(/\/$/, '');
+  serviceKey = clean(serviceKey);
+  const keyKind = serviceKey.startsWith('sb_secret_') ? 'secret' : serviceKey.startsWith('sb_publishable_') ? 'publishable' : serviceKey.startsWith('eyJ') ? 'legacy JWT' : 'unrecognized';
   const key = secret || crypto.createHash('sha256').update(`voltbridge-session:${serviceKey}`).digest('hex');
   const mac = (s) => crypto.createHmac('sha256', key).update(s).digest('base64url');
 
@@ -17,7 +21,7 @@ export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, ope
   const bearer = serviceKey.startsWith('sb_') ? {} : { authorization: `Bearer ${serviceKey}` };
   const api = async (path, init = {}) => {
     const res = await fetchFn(`${url}${path}`, { ...init, headers: { apikey: serviceKey, ...bearer, 'content-type': 'application/json', ...init.headers } });
-    if (!res.ok) throw new Error(`Supabase ${res.status} on ${path.split('?')[0]}`);
+    if (!res.ok) throw new Error(`Supabase ${res.status} on ${path.split('?')[0]} (key: ${keyKind}): ${(await res.text().catch(() => '')).slice(0, 200)}`);
     return res.status === 204 ? null : res.json().catch(() => null);
   };
   const rpc = async (name, args) => Number(await api(`/rest/v1/rpc/${name}`, { method: 'POST', body: JSON.stringify(args) })) || 0;
@@ -50,7 +54,7 @@ export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, ope
   }
 
   return {
-    userCap, globalCap,
+    userCap, globalCap, keyKind,
 
     // our session cookie value: base64url(json).mac, valid for `days`
     sign(user, days = 7) {

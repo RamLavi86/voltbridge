@@ -339,5 +339,5 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, HOST, () => console.log(`voltbridge on http://${HOST}:${PORT}  (default cwd ${CWD})\n  chat: ${CHAT ? `${ASSISTANT}${PROVIDER !== 'claude' ? ` (${process.env[PROVIDERS[PROVIDER].model] || 'OPENROUTER_MODEL missing'}${process.env[KEY_VAR] ? '' : `, ${KEY_VAR} missing`})` : ''}` : 'off'}` +
-  (AUTH ? `\n  sign-in: Google via Supabase, $${AUTH.userCap.toFixed(2)} per user and $${AUTH.globalCap.toFixed(2)} in total per month` : !LOCAL ? '\n  sign-in: shared access token (set SUPABASE_URL and SUPABASE_SERVICE_KEY for Google sign-in)' : '') +
+  (AUTH ? `\n  sign-in: Google via Supabase (${AUTH.keyKind} key), $${AUTH.userCap.toFixed(2)} per user and $${AUTH.globalCap.toFixed(2)} in total per month${AUTH.keyKind === 'secret' || AUTH.keyKind === 'legacy JWT' ? '' : `\n  WARNING: SUPABASE_SERVICE_KEY is a ${AUTH.keyKind} key; it must be the secret key (sb_secret_...), or the database refuses every chat`}` : !LOCAL ? '\n  sign-in: shared access token (set SUPABASE_URL and SUPABASE_SERVICE_KEY for Google sign-in)' : '') +
   (TOKEN && !process.env.VOLTBRIDGE_TOKEN ? `\n  open once from another machine: http://${os.hostname()}:${PORT}/?token=${TOKEN}` : '')));
