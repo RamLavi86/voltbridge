@@ -342,6 +342,7 @@ async function fakeSupabase(state) {
     const u = new URL(req.url, 'http://x');
     const out = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(body === undefined ? '' : JSON.stringify(body)); };
     state.calls.push(`${req.method} ${u.pathname} ${req.headers.apikey}`);
+    if (u.pathname.startsWith('/rest/')) (state.rest ||= []).push(req.headers.authorization);
     if (state.down) return out(500, { message: 'down' });
     if (u.pathname === '/auth/v1/user') {
       const t = /^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1];
@@ -378,6 +379,19 @@ await ok('sign-in: token check, signed cookie (forged and expired ones refused)'
     t += 8 * 86400000;
     assert.equal(a.read(`vb=${v}`), null, 'expires after 7 days');
     assert.ok(state.calls.every((c) => c.endsWith(' svc')), 'every call carries the service key header');
+  } finally { sb.close(); }
+});
+
+await ok('new-style secret keys (sb_secret_...) go in apikey only, legacy JWT keys also in Authorization', async () => {
+  const state = { calls: [], allowed: {}, spent: 0, all: 0, usage: [] };
+  const sb = await fakeSupabase(state);
+  try {
+    await createAuth({ url: sb.url, serviceKey: 'sb_secret_abc' }).limits({ id: 'u1', email: 'ann@example.com' });
+    assert.ok(state.rest.length >= 3 && state.rest.every((a) => a === undefined), 'no Authorization header for an sb_ key');
+    state.rest = [];
+    await createAuth({ url: sb.url, serviceKey: 'eyJlegacy.jwt.key' }).limits({ id: 'u1', email: 'ann@example.com' });
+    assert.ok(state.rest.every((a) => a === 'Bearer eyJlegacy.jwt.key'));
+    assert.ok(state.calls.some((c) => c.endsWith(' sb_secret_abc')), 'the key is sent as apikey');
   } finally { sb.close(); }
 });
 

@@ -12,8 +12,11 @@ export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, ope
   const key = secret || crypto.createHash('sha256').update(`voltbridge-session:${serviceKey}`).digest('hex');
   const mac = (s) => crypto.createHmac('sha256', key).update(s).digest('base64url');
 
+  // Supabase's new secret keys (sb_secret_...) are not JWTs and go in the apikey header only; the legacy service_role key is a JWT
+  // and also goes in Authorization.
+  const bearer = serviceKey.startsWith('sb_') ? {} : { authorization: `Bearer ${serviceKey}` };
   const api = async (path, init = {}) => {
-    const res = await fetchFn(`${url}${path}`, { ...init, headers: { apikey: serviceKey, authorization: `Bearer ${serviceKey}`, 'content-type': 'application/json', ...init.headers } });
+    const res = await fetchFn(`${url}${path}`, { ...init, headers: { apikey: serviceKey, ...bearer, 'content-type': 'application/json', ...init.headers } });
     if (!res.ok) throw new Error(`Supabase ${res.status} on ${path.split('?')[0]}`);
     return res.status === 204 ? null : res.json().catch(() => null);
   };
