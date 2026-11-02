@@ -58,7 +58,7 @@ export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, ope
   }
 
   return {
-    userCap, globalCap, keyKind,
+    userCap, globalCap, keyKind, api,
 
     // our session cookie value: base64url(json).mac, valid for `days`
     sign(user, days = 7) {

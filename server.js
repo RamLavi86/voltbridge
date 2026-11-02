@@ -9,6 +9,7 @@ import { query, getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import * as lib from './lib.js';
 import * as ai from './ai.js';
 import { createAuth, costOf } from './auth.js';
+import { createStore } from './store.js';
 
 // Settings such as OPENROUTER_API_KEY can live in a git-ignored .env next to this file; real environment variables win.
 try { process.loadEnvFile(fileURLToPath(new URL('./.env', import.meta.url))); } catch { /* no .env */ }
@@ -46,11 +47,19 @@ const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.
 // Who is calling: a user {id, email, root (their sessions folder), cwd} or null. Locally and with the shared token there is one user.
 const LOCAL_USER = { id: 'local', email: null, root: lib.SESSIONS, cwd: CWD };
 const users = new Map();
+const STORE = AUTH && createStore(AUTH.api);
+// hosted disks do not survive a restart: copy each user's projects to Supabase every few seconds and when the server is stopped
+if (STORE) setInterval(() => users.forEach((u) => STORE.push(u)), 8000).unref();
 const userOf = (req) => {
   if (!AUTH) return !TOKEN || same(/(?:^|;\s*)vb=([^;]+)/.exec(req.headers.cookie || '')?.[1], TOKEN) ? LOCAL_USER : null;
   const u = AUTH.read(req.headers.cookie);
   if (!u || !/^[\w-]{1,64}$/.test(u.id)) return null;
-  if (!users.has(u.id)) { const root = path.join(lib.SESSIONS, `u_${u.id}`); fs.mkdirSync(root, { recursive: true }); users.set(u.id, { ...u, root, cwd: root }); }
+  if (!users.has(u.id)) {
+    const root = path.join(lib.SESSIONS, `u_${u.id}`); fs.mkdirSync(root, { recursive: true });
+    const rec = { ...u, root, cwd: root };
+    rec.ready = STORE.restore(rec); // projects saved in Supabase come back before the user's first request is served
+    users.set(u.id, rec);
+  }
   return users.get(u.id);
 };
 // a WebSocket must come from our own pages
@@ -101,6 +110,7 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   const user = userOf(req);
+  if (user?.ready) await user.ready;
   if (!user && AUTH && p === '/') return page(res, 'landing');
   if (!user) { res.writeHead(401, { 'Content-Type': 'text/plain' }); return res.end(AUTH ? 'voltbridge: sign in at /' : 'voltbridge: open the link with ?token=... printed in the server terminal'); }
   if (req.method === 'POST' && p === '/client-error') {
@@ -295,10 +305,12 @@ const wss = new WebSocketServer({ server, path: '/ws', verifyClient: ({ req }) =
 wss.on('connection', (ws, req) => {
   let s = null;
   const user = ws.user = userOf(req);
-  send(ws, { ...sessionsMsg(user), t: 'hello', cwd: user.cwd, assistant: ASSISTANT, user: user.email });
+  const ready = user.ready || Promise.resolve();
+  ready.then(() => send(ws, { ...sessionsMsg(user), t: 'hello', cwd: user.cwd, assistant: ASSISTANT, user: user.email }));
   ws.on('message', async (raw) => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     try {
+      await ready;
       if (s?.deleted) s = null;
       if (m.t === 'list') send(ws, sessionsMsg(user));
       else if (m.t === 'open') {
@@ -336,7 +348,13 @@ wss.on('connection', (ws, req) => {
       else if (m.t === 'outDir') { if (!LOCAL) throw new Error('The output folder is fixed on a hosted server.'); s.outDir = path.resolve(s.cwd, m.dir); lib.saveSession(s, []); broadcast(s, { t: 'outDir', outDir: s.outDir }); }
     } catch (e) { send(ws, { t: 'error', text: String(e.message || e), for: m.t }); }
   });
-  ws.on('close', () => s?.clients.delete(ws));
+  ws.on('close', () => { s?.clients.delete(ws); if (STORE) STORE.push(user); });
+});
+// a redeploy stops the server with SIGTERM: write pending sheets and copy every user's projects out before exiting
+process.on('SIGTERM', async () => {
+  for (const t of live.values()) { clearTimeout(t.timer); if (!t.deleted) lib.saveSession(t, [...t.dirty]); }
+  if (STORE) await Promise.race([Promise.all([...users.values()].map((u) => STORE.push(u))), new Promise((r) => setTimeout(r, 8000))]);
+  process.exit(0);
 });
 
 server.listen(PORT, HOST, () => console.log(`voltbridge on http://${HOST}:${PORT}  (default cwd ${CWD})\n  chat: ${CHAT ? `${ASSISTANT}${PROVIDER !== 'claude' ? ` (${process.env[PROVIDERS[PROVIDER].model] || 'OPENROUTER_MODEL missing'}${process.env[KEY_VAR] ? '' : `, ${KEY_VAR} missing`})` : ''}` : 'off'}` +

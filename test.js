@@ -484,5 +484,51 @@ await ok('caps: per user, whole server, custom allowance, closed signup, Supabas
   assert.equal(costOf({ prompt: 1000000, output: 1000000, cost: 0.3 }), 0.3);
   assert.equal(costOf({ prompt: 1000000, output: 1000000 }), 6, 'without a reported cost, a high estimate is used');
 });
+await ok('store: projects are copied to Supabase, restored after the disk is wiped, and deletions follow', async () => {
+  const { createStore } = await import('./store.js');
+  const rows = new Map(); // "user\0path" -> data, like the user_files table
+  let down = false;
+  const api = async (p, init = {}) => {
+    if (down) throw new Error('Supabase 500 on /rest/v1/user_files');
+    const u = new URL(p, 'http://x'), uid = decodeURIComponent((u.searchParams.get('user_id') || '').slice(3));
+    if (!init.method) return [...rows].filter(([k]) => k.startsWith(`${uid}\0`)).map(([k, data]) => ({ path: k.split('\0')[1], data }));
+    if (init.method === 'POST') { for (const r of JSON.parse(init.body)) rows.set(`${r.user_id}\0${r.path}`, r.data); return null; }
+    rows.delete(`${uid}\0${decodeURIComponent(u.searchParams.get('path').slice(3))}`); return null;
+  };
+  const dir = () => fs.mkdtempSync(path.join(tmp, 'store-'));
+  const user = { id: 'u1', root: dir() };
+  const store = createStore(api);
+  await store.restore(user);
+  const a = lib.openSession('plan', user.root, user.root);
+  a.chat = [{ role: 'user', text: 'hi' }]; lib.saveChat(a); lib.saveSession(a);
+  fs.mkdirSync(path.join(user.root, 'schematics'), { recursive: true });
+  fs.writeFileSync(path.join(user.root, 'schematics', 'out.png'), 'x'); // an export folder is not a project
+  await store.push(user);
+  assert.ok([...rows.keys()].some((k) => k.endsWith('plan/session.json')) && [...rows.keys()].some((k) => k.endsWith('plan/chat.json')));
+  assert.ok(![...rows.keys()].some((k) => k.includes('schematics')), 'exports are not stored');
+  // a new server with an empty disk
+  const fresh = { id: 'u1', root: dir() };
+  await createStore(api).restore(fresh);
+  assert.deepEqual(lib.listSessions(fresh.root).map((x) => x.name), ['plan']);
+  assert.deepEqual(lib.openSession('plan', fresh.root, fresh.root).chat, [{ role: 'user', text: 'hi' }]);
+  // another user sees nothing
+  const other = { id: 'u2', root: dir() };
+  await createStore(api).restore(other);
+  assert.deepEqual(lib.listSessions(other.root), []);
+  // a deleted project leaves Supabase too
+  lib.deleteSession('plan', user.root);
+  await store.push(user);
+  assert.equal([...rows.keys()].filter((k) => k.startsWith('u1\0')).length, 0);
+  // when Supabase cannot be read, an empty folder must not overwrite saved work
+  rows.set('u3\0keep/session.json', Buffer.from('{}').toString('base64'));
+  down = true;
+  const u3 = { id: 'u3', root: dir() };
+  const s3 = createStore(api);
+  const quiet = console.error; console.error = () => {};
+  try { await s3.restore(u3); lib.saveSession(lib.openSession('new', u3.root, u3.root)); down = false; rows.delete('u3\0keep/session.json'); down = true; await s3.push(u3); } finally { console.error = quiet; }
+  down = false;
+  assert.equal([...rows.keys()].filter((k) => k.startsWith('u3\0new')).length, 0, 'nothing is pushed before a restore has worked');
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`${n} passed${process.exitCode ? ', some FAILED' : ''}`);
