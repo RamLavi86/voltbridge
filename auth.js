@@ -22,6 +22,33 @@ export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, ope
   };
   const rpc = async (name, args) => Number(await api(`/rest/v1/rpc/${name}`, { method: 'POST', body: JSON.stringify(args) })) || 0;
 
+  // the project's public signing keys (no API key needed), refreshed every 10 minutes or when a token names an unknown key
+  let pub = { at: 0, keys: [] };
+  const publicKeys = async (force) => {
+    if (force || now() - pub.at > 600000) {
+      const r = await fetchFn(`${url}/auth/v1/.well-known/jwks.json`);
+      if (r.ok) pub = { at: now(), keys: (await r.json()).keys || [] };
+    }
+    return pub.keys;
+  };
+  // claims of a validly signed, unexpired access token for this project; null when the token is not an ES256/RS256 JWT
+  async function verifyJwt(token, refuse) {
+    const [h, p, s] = token.split('.');
+    let head, claims;
+    try { head = JSON.parse(Buffer.from(h, 'base64url')); claims = JSON.parse(Buffer.from(p, 'base64url')); } catch { return null; }
+    if (!s || !['ES256', 'RS256'].includes(head.alg)) return null;
+    const jwk = (await publicKeys()).find((k) => k.kid === head.kid) || (await publicKeys(true)).find((k) => k.kid === head.kid);
+    if (!jwk) refuse(`no public key ${head.kid}`);
+    const pk = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+    const good = crypto.verify('sha256', Buffer.from(`${h}.${p}`), head.alg === 'ES256' ? { key: pk, dsaEncoding: 'ieee-p1363' } : pk, Buffer.from(s, 'base64url'));
+    if (!good) refuse('bad signature');
+    if (!(claims.exp * 1000 > now())) refuse('token expired');
+    if (claims.iss !== `${url}/auth/v1`) refuse(`wrong issuer ${claims.iss}`);
+    if (![].concat(claims.aud).includes('authenticated')) refuse('wrong audience');
+    if (!claims.sub || !claims.email) refuse('no user or email in token');
+    return claims;
+  }
+
   return {
     userCap, globalCap,
 
@@ -43,12 +70,20 @@ export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, ope
       } catch { return null; }
     },
 
-    // the access token Supabase gives the browser after Google sign-in -> {id, email}, or throws
+    // the access token Supabase gives the browser after Google sign-in -> {id, email}, or throws a message fit for the user.
+    // Tokens signed with the project's public key (ES256/RS256) are verified here; older HS256 ones are checked with Supabase.
     async login(accessToken) {
+      const refuse = (why, msg = 'Sign-in was not accepted. Try again.') => { console.error('[auth] sign-in refused:', why); throw new Error(msg); };
+      const noEmail = 'Your Google account has no verified email address.';
+      const c = await verifyJwt(String(accessToken || ''), refuse);
+      if (c) {
+        if (!(c.user_metadata?.email_verified === true || c.app_metadata?.provider === 'google')) refuse('email not verified', noEmail);
+        return { id: c.sub, email: String(c.email).toLowerCase() };
+      }
       const res = await fetchFn(`${url}/auth/v1/user`, { headers: { apikey: serviceKey, authorization: `Bearer ${accessToken}` } });
-      if (!res.ok) throw new Error('Sign-in was not accepted. Try again.');
+      if (!res.ok) refuse(`/auth/v1/user answered ${res.status}`);
       const u = await res.json();
-      if (!u.id || !u.email || !(u.email_confirmed_at || u.confirmed_at)) throw new Error('Your Google account has no verified email address.');
+      if (!u.id || !u.email || !(u.email_confirmed_at || u.confirmed_at)) refuse('email not verified', noEmail);
       return { id: u.id, email: String(u.email).toLowerCase() };
     },
 
