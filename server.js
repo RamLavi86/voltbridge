@@ -54,6 +54,11 @@ const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   const p = decodeURIComponent(u.pathname);
   if (p === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
+  // public pages (Google's consent screen links to them), served before any login check
+  if (p === '/privacy' || p === '/terms') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return fs.createReadStream(path.join(here, 'pages', `${p.slice(1)}.html`)).pipe(res);
+  }
   // a '+' in the query reads as a space, and base64 tokens contain '+'
   if (TOKEN && same(u.searchParams.get('token')?.replaceAll(' ', '+'), TOKEN)) {
     res.writeHead(302, { 'Set-Cookie': `vb=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`, Location: '/' });
