@@ -424,6 +424,23 @@ await ok('new-style secret keys (sb_secret_...) go in apikey only, legacy JWT ke
   } finally { sb.close(); }
 });
 
+await ok('server key: type is detected, pasted whitespace and quotes are stripped, the Supabase reason reaches the log', async () => {
+  const state = { calls: [], allowed: {}, spent: 0, all: 0, usage: [] };
+  const sb = await fakeSupabase(state);
+  try {
+    const kinds = ['sb_secret_a', 'sb_publishable_a', 'eyJa.b.c', 'whatever'].map((k) => createAuth({ url: sb.url, serviceKey: k }).keyKind);
+    assert.deepEqual(kinds, ['secret', 'publishable', 'legacy JWT', 'unrecognized']);
+    const a = createAuth({ url: sb.url + '/ ', serviceKey: '  "sb_secret_pasted"\n' });
+    assert.equal(a.keyKind, 'secret');
+    await a.limits({ id: 'u1', email: 'ann@example.com' });
+    assert.ok(state.calls.some((c) => c.endsWith(' sb_secret_pasted')), 'the key is sent without the extra characters');
+    state.down = true;
+    const seen = []; const quiet = console.error; console.error = (...x) => seen.push(x.join(' '));
+    try { await a.limits({ id: 'u1', email: 'ann@example.com' }); } finally { console.error = quiet; }
+    assert.ok(seen[0].includes('Supabase 500 on /rest/v1/allowed_emails (key: secret): {"message":"down"}'), seen[0]);
+  } finally { sb.close(); }
+});
+
 await ok('caps: per user, whole server, custom allowance, closed signup, Supabase down', async () => {
   const state = { calls: [], allowed: { 'vip@example.com': 5, 'blocked@example.com': 0 }, spent: 0.2, all: 3, usage: [] };
   const sb = await fakeSupabase(state);
