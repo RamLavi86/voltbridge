@@ -344,6 +344,7 @@ async function fakeSupabase(state) {
     state.calls.push(`${req.method} ${u.pathname} ${req.headers.apikey}`);
     if (u.pathname.startsWith('/rest/')) (state.rest ||= []).push(req.headers.authorization);
     if (state.down) return out(500, { message: 'down' });
+    if (u.pathname === '/auth/v1/.well-known/jwks.json') return out(200, { keys: state.jwks || [] });
     if (u.pathname === '/auth/v1/user') {
       const t = /^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1];
       return t === 'good' ? out(200, { id: 'u1', email: 'Ann@Example.com', email_confirmed_at: '2026-11-01' })
@@ -380,6 +381,34 @@ await ok('sign-in: token check, signed cookie (forged and expired ones refused)'
     assert.equal(a.read(`vb=${v}`), null, 'expires after 7 days');
     assert.ok(state.calls.every((c) => c.endsWith(' svc')), 'every call carries the service key header');
   } finally { sb.close(); }
+});
+
+await ok('sign-in: ES256 access tokens are verified with the project public key (no API key involved)', async () => {
+  const crypto = await import('node:crypto');
+  const mk = () => crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const pair = mk(), other = mk();
+  const state = { calls: [], allowed: {}, spent: 0, all: 0, usage: [], jwks: [{ ...pair.publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'ES256', use: 'sig', key_ops: ['verify'], ext: true }] };
+  const sb = await fakeSupabase(state);
+  const a = createAuth({ url: sb.url, serviceKey: 'sb_secret_x' });
+  const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const jwt = (claims = {}, { key = pair.privateKey, kid = 'k1' } = {}) => {
+    const data = b64u({ alg: 'ES256', typ: 'JWT', kid }) + '.' + b64u({ sub: 'u7', email: 'Ann@Example.com', aud: 'authenticated', iss: sb.url + '/auth/v1', exp: Math.floor(Date.now() / 1000) + 3600, user_metadata: { email_verified: true }, app_metadata: { provider: 'google' }, ...claims });
+    return data + '.' + crypto.sign('sha256', Buffer.from(data), { key, dsaEncoding: 'ieee-p1363' }).toString('base64url');
+  };
+  const quiet = console.error; console.error = () => {};
+  try {
+    assert.deepEqual(await a.login(jwt()), { id: 'u7', email: 'ann@example.com' });
+    assert.ok(!state.calls.some((c) => c.includes('/auth/v1/user')), 'no call to Supabase with our key');
+    const good = jwt(); const [h, p, s] = good.split('.');
+    const forged = b64u({ sub: 'u9', email: 'evil@x.com', aud: 'authenticated', iss: sb.url + '/auth/v1', exp: 9999999999, user_metadata: { email_verified: true } });
+    await assert.rejects(a.login([h, forged, s].join('.')), /not accepted/, 'changed payload');
+    await assert.rejects(a.login(jwt({}, { key: other.privateKey })), /not accepted/, 'signed by another key');
+    await assert.rejects(a.login(jwt({ exp: Math.floor(Date.now() / 1000) - 10 })), /not accepted/, 'expired');
+    await assert.rejects(a.login(jwt({ iss: 'https://evil.example/auth/v1' })), /not accepted/, 'another project');
+    await assert.rejects(a.login(jwt({ aud: 'anon' })), /not accepted/, 'wrong audience');
+    await assert.rejects(a.login(jwt({}, { kid: 'nope' })), /not accepted/, 'unknown key id');
+    await assert.rejects(a.login(jwt({ user_metadata: {}, app_metadata: { provider: 'email' } })), /verified email/);
+  } finally { console.error = quiet; sb.close(); }
 });
 
 await ok('new-style secret keys (sb_secret_...) go in apikey only, legacy JWT keys also in Authorization', async () => {
