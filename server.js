@@ -77,6 +77,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
   // public pages (Google's consent screen links to them), served before any login check
   if (p === '/privacy' || p === '/terms') return page(res, p.slice(1));
+  if (p === '/favicon.svg') { res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' }); return fs.createReadStream(path.join(here, 'pages', 'favicon.svg')).pipe(res); }
   const https = (req.headers['x-forwarded-proto'] || '').split(',')[0] === 'https';
   if (AUTH) { // Google sign-in: the browser goes to Supabase, comes back to /auth/callback with a token, which we trade for our own cookie
     if (p === '/auth/google') {
