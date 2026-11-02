@@ -441,6 +441,23 @@ await ok('server key: type is detected, pasted whitespace and quotes are strippe
   } finally { sb.close(); }
 });
 
+await ok('server key: a line break pasted into the middle is removed, and no log line can quote the key', async () => {
+  const state = { calls: [], allowed: {}, spent: 0, all: 0, usage: [] };
+  const sb = await fakeSupabase(state);
+  const pasted = 'sb_secret_AbCdEfGh\nIjKlMnOpQrSt';
+  try {
+    const a = createAuth({ url: sb.url, serviceKey: pasted });
+    assert.equal(a.keyKind, 'secret');
+    assert.deepEqual(await a.limits({ id: 'u1', email: 'ann@example.com' }), { ok: true, cap: 0.5, spent: 0 });
+    assert.ok(state.calls.every((c) => c.endsWith(' sb_secret_AbCdEfGhIjKlMnOpQrSt')), 'sent as one piece');
+    const leaky = createAuth({ url: sb.url, serviceKey: pasted, fetchFn: async () => { throw new TypeError('Headers.append: "' + pasted + '" is an invalid header value.'); } });
+    const seen = []; const quiet = console.error; console.error = (...x) => seen.push(x.join(' '));
+    try { await leaky.limits({ id: 'u1', email: 'ann@example.com' }); await leaky.record({ id: 'u1', email: 'ann@example.com' }, { model: 'm' }); } finally { console.error = quiet; }
+    assert.equal(seen.length, 2);
+    for (const l of seen) assert.ok(!/AbCdEfGh|IjKlMnOpQrSt/.test(l), 'the key is not in: ' + l);
+  } finally { sb.close(); }
+});
+
 await ok('caps: per user, whole server, custom allowance, closed signup, Supabase down', async () => {
   const state = { calls: [], allowed: { 'vip@example.com': 5, 'blocked@example.com': 0 }, spent: 0.2, all: 3, usage: [] };
   const sb = await fakeSupabase(state);

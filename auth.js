@@ -8,11 +8,15 @@ const DAY = 86400000;
 // Options: url, serviceKey (Supabase), userCap / globalCap (dollars per calendar month, UTC), open (anyone with a Google account
 // may sign in; false = only emails listed in allowed_emails), secret (cookie signing; derived from the service key by default).
 export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, open = true, secret, fetchFn = fetch, now = Date.now }) {
-  // pasted values often carry a trailing newline or quotes, which Supabase answers with 401
-  const clean = (v) => String(v).trim().replace(/^["']|["']$/g, '').trim();
+  // Pasted values often carry a trailing newline, a line break in the middle, quotes or the variable name; none of that is part of a key.
+  const clean = (v) => String(v).replace(/\s+/g, '').replace(/^[A-Z_]+=/, '').replace(/^["']|["']$/g, '');
+  const pasted = String(serviceKey);
   url = clean(url).replace(/\/$/, '');
   serviceKey = clean(serviceKey);
-  const keyKind = serviceKey.startsWith('sb_secret_') ? 'secret' : serviceKey.startsWith('sb_publishable_') ? 'publishable' : serviceKey.startsWith('eyJ') ? 'legacy JWT' : 'unrecognized';
+  // Errors from fetch can quote a bad header value, i.e. the key itself: never let a key reach a log.
+  const secrets = [serviceKey, ...pasted.split(/\s+/)].filter((x) => x.length >= 8);
+  const redact = (m) => secrets.reduce((s, k) => s.split(k).join('[key]'), String(m));
+  const keyKind = !/^[\x21-\x7e]+$/.test(serviceKey) ? 'unrecognized' : serviceKey.startsWith('sb_secret_') ? 'secret' : serviceKey.startsWith('sb_publishable_') ? 'publishable' : serviceKey.startsWith('eyJ') ? 'legacy JWT' : 'unrecognized';
   const key = secret || crypto.createHash('sha256').update(`voltbridge-session:${serviceKey}`).digest('hex');
   const mac = (s) => crypto.createHmac('sha256', key).update(s).digest('base64url');
 
@@ -21,7 +25,7 @@ export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, ope
   const bearer = serviceKey.startsWith('sb_') ? {} : { authorization: `Bearer ${serviceKey}` };
   const api = async (path, init = {}) => {
     const res = await fetchFn(`${url}${path}`, { ...init, headers: { apikey: serviceKey, ...bearer, 'content-type': 'application/json', ...init.headers } });
-    if (!res.ok) throw new Error(`Supabase ${res.status} on ${path.split('?')[0]} (key: ${keyKind}): ${(await res.text().catch(() => '')).slice(0, 200)}`);
+    if (!res.ok) throw new Error(redact(`Supabase ${res.status} on ${path.split('?')[0]} (key: ${keyKind}): ${(await res.text().catch(() => '')).slice(0, 200)}`));
     return res.status === 204 ? null : res.json().catch(() => null);
   };
   const rpc = async (name, args) => Number(await api(`/rest/v1/rpc/${name}`, { method: 'POST', body: JSON.stringify(args) })) || 0;
@@ -102,7 +106,7 @@ export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, ope
         if (spent >= cap) return { ok: false, reason: `You have used your allowance for this month ($${cap.toFixed(2)}). It resets on the 1st.` };
         return { ok: true, cap, spent };
       } catch (e) {
-        console.error('[auth]', e.message);
+        console.error('[auth]', redact(e.message));
         return { ok: false, reason: 'Could not check your allowance right now. Please try again in a minute.' };
       }
     },
@@ -110,7 +114,7 @@ export function createAuth({ url, serviceKey, userCap = 0.5, globalCap = 10, ope
     async record(user, { model, prompt = 0, output = 0, cost = 0 }) {
       try {
         await api('/rest/v1/usage', { method: 'POST', headers: { prefer: 'return=minimal' }, body: JSON.stringify({ user_id: user.id, email: user.email, model, tokens_in: prompt, tokens_out: output, cost_usd: cost }) });
-      } catch (e) { console.error('[auth] usage not recorded:', e.message); }
+      } catch (e) { console.error('[auth] usage not recorded:', redact(e.message)); }
     },
   };
 }
