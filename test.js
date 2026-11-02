@@ -191,11 +191,11 @@ await ok('session round trip and revision conflicts', () => {
   assert.equal(t.docs[1].rev, rev + 1);
 });
 
-// ---------- the API loop (ai.js) against a scripted fake Gemini ----------
+// ---------- the API loop (ai.js) against a scripted fake OpenAI-style server ----------
 const ai = await import('./ai.js');
 const http = await import('node:http');
 
-await ok('tool schemas fit Gemini: no property-less objects, free-form args as JSON strings', () => {
+await ok('tool schemas: no property-less objects, free-form args as JSON strings', () => {
   const tl = ai.apiTools(lib.toolDefs(s, ctx));
   const walk = (n, where) => {
     if (n.type === 'object') { assert.ok(Object.keys(n.properties || {}).length, `${where}: object without properties`); for (const [k, v] of Object.entries(n.properties)) walk(v, `${where}.${k}`); }
@@ -210,61 +210,6 @@ await ok('tool schemas fit Gemini: no property-less objects, free-form args as J
   assert.equal(tl.find((t) => t.name === 'list_sheets').parameters, undefined, 'tools without arguments declare none');
 });
 
-await ok('agent loop: tools, replayed thought signatures, image fallback, split SSE events', async () => {
-  const s2 = lib.openSession('t2', tmp);
-  const bodies = [], headers = [];
-  const sse = (parts) => `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts } }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 } })}\n\n`;
-  const fake = http.createServer((req, res) => {
-    let b = ''; req.on('data', (d) => { b += d; }).on('end', async () => {
-      const body = JSON.parse(b); bodies.push(body); headers.push(req.headers['x-goog-api-key'] + ' ' + req.url);
-      const n = bodies.length;
-      const lastParts = body.contents.at(-1).parts;
-      if (n === 4 && lastParts.some((p) => p.inlineData)) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'no images here' } })); }
-      res.writeHead(200, { 'content-type': 'text/event-stream' });
-      if (n === 1) res.end(sse([{ text: 'Looking. ' }, { functionCall: { name: 'list_sheets', args: {} }, thoughtSignature: 'sig1' }]));
-      else if (n === 2) res.end(sse([{ functionCall: { name: 'edit_sheet', args: { sheet: '1', ops: JSON.stringify([{ op: 'add', sym: 'resistor', x: 100, y: 100 }]) } } }]));
-      else if (n === 3) res.end(sse([{ functionCall: { name: 'snapshot', args: { sheet: '1', width: 400 } } }]));
-      else { const e = sse([{ text: 'Done.' }]); res.write(e.slice(0, 40)); await new Promise((r) => setTimeout(r, 20)); res.end(e.slice(40)); }
-    });
-  });
-  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
-  try {
-    const text = [], seen = [];
-    s2.chat.push({ role: 'user', text: 'draw a resistor', ctx: '[voltbridge] test\n\n', images: [] });
-    const usage = await ai.runAgent({
-      provider: ai.geminiProvider({ apiKey: 'k', baseUrl: `http://127.0.0.1:${fake.address().port}` }),
-      system: 'sys', messages: s2.chat, tools: ai.apiTools(lib.toolDefs(s2, { sheetChanged() {}, sheetsChanged() {}, exported() {} })), imageDir: tmp,
-      onText: (t) => text.push(t), onTool: (c) => seen.push(c.name),
-    });
-    assert.equal(text.join(''), 'Looking. Done.');
-    assert.deepEqual(seen, ['list_sheets', 'edit_sheet', 'snapshot']);
-    assert.ok(s2.docs[1].parts.some((p) => p.sym === 'resistor'), 'edit_sheet ran with its JSON-string ops');
-    assert.deepEqual(s2.chat.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant', 'tool', 'assistant', 'tool', 'assistant']);
-    assert.deepEqual(usage, { prompt: 40, output: 20 }, 'four answered steps; the rejected request adds nothing');
-    assert.equal(headers[0], 'k /v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse', 'key goes in a header, not the URL');
-    assert.ok(bodies[0].tools[0].functionDeclarations.some((d) => d.name === 'edit_sheet'));
-    assert.equal(bodies[0].contents[0].parts.at(-1).text, '[voltbridge] test\n\ndraw a resistor');
-    assert.equal(bodies[1].contents[1].parts[1].thoughtSignature, 'sig1', 'model parts are replayed as received');
-    assert.equal(bodies[1].contents[2].parts[0].functionResponse.name, 'list_sheets');
-    assert.ok(bodies[3].contents.at(-1).parts.some((p) => p.inlineData), 'first try sends the snapshot');
-    assert.ok(!bodies[4].contents.at(-1).parts.some((p) => p.inlineData), 'after a 400 it retries without images');
-    lib.saveChat(s2);
-    const saved = fs.readFileSync(path.join(s2.dir, 'chat.json'), 'utf8');
-    assert.ok(!saved.includes('"shots"') && lib.openSession('t2', tmp).chat.length === 8, 'chat is saved without tool images and reloads');
-  } finally { fake.close(); }
-});
-
-// a fake Gemini that answers request n with replies[n] (a list of parts) and keeps the request bodies
-async function fakeGemini(replies) {
-  const bodies = [];
-  const srv = http.createServer((req, res) => { let b = ''; req.on('data', (d) => { b += d; }).on('end', () => {
-    bodies.push(JSON.parse(b));
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.end(`data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: replies[bodies.length - 1] || [{ text: 'end' }] } }] })}\n\n`);
-  }); });
-  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
-  return { bodies, provider: ai.geminiProvider({ apiKey: 'k', baseUrl: `http://127.0.0.1:${srv.address().port}` }), close: () => srv.close() };
-}
 const toolCtx = { sheetChanged() {}, sheetsChanged() {}, exported() {} };
 
 await ok('symbol library as compact text', () => {
@@ -275,51 +220,117 @@ await ok('symbol library as compact text', () => {
   assert.match(lib.sheetsSummary(s), /sheets now: 1 "Motor starter" A3, \d+ parts; /);
 });
 
+const oneCall = (name, args, id) => [{ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] } }] }];
+
 await ok('agent loop sends only the newest copy of a repeated read, and the newest pasted image', async () => {
   const s3 = lib.openSession('t3', tmp);
-  const fake = await fakeGemini([
-    [{ functionCall: { name: 'get_sheet', args: { sheet: '1' } } }],
-    [{ functionCall: { name: 'edit_sheet', args: { sheet: '1', ops: '[{"op":"add","sym":"resistor","x":100,"y":100}]' } } }],
-    [{ functionCall: { name: 'get_sheet', args: { sheet: '1' } } }],
+  const fake = await fakeChat([
+    oneCall('get_sheet', { sheet: '1' }, 'c1'),
+    oneCall('edit_sheet', { sheet: '1', ops: '[{"op":"add","sym":"resistor","x":100,"y":100}]' }, 'c2'),
+    oneCall('get_sheet', { sheet: '1' }, 'c3'),
   ]);
   fs.mkdirSync(path.join(tmp, 'img'), { recursive: true });
   for (const f of ['a.png', 'b.png']) fs.writeFileSync(path.join(tmp, 'img', f), 'x');
   const messages = [{ role: 'user', text: 'first', images: ['a.png'] }, { role: 'assistant', text: 'seen', calls: [] }, { role: 'user', text: 'second', images: ['b.png'] }];
   try {
     await ai.runAgent({ provider: fake.provider, system: 's', messages, tools: ai.apiTools(lib.toolDefs(s3, toolCtx)), imageDir: path.join(tmp, 'img') });
-    const last = fake.bodies.at(-1).contents;
-    const reads = last.flatMap((c) => c.parts).filter((p) => p.functionResponse?.name === 'get_sheet').map((p) => p.functionResponse.response.result);
+    const last = fake.bodies.at(-1).messages;
+    const reads = last.filter((m) => m.role === 'tool' && ['c1', 'c3'].includes(m.tool_call_id)).map((m) => m.content);
     assert.equal(reads.length, 2);
     assert.match(reads[0], /^\(older result left out/);
     assert.ok(reads[1].includes('"parts"'), 'the latest read stays in full');
-    assert.ok(!last[0].parts.some((p) => p.inlineData) && last[0].parts.at(-1).text.includes('not shown again'), 'older image is dropped');
-    assert.ok(last[2].parts.some((p) => p.inlineData), 'newest image is attached');
+    const users = last.filter((m) => m.role === 'user');
+    assert.ok(typeof users[0].content === 'string' && users[0].content.includes('not shown again'), 'older image is dropped');
+    assert.ok(users[1].content.some((c) => c.type === 'image_url'), 'newest image is attached');
   } finally { fake.close(); }
 });
 
 await ok('agent loop drops the oldest turns past the history budget, never mid-turn', async () => {
-  const fake = await fakeGemini([[{ text: 'ok' }]]);
+  const fake = await fakeChat([[{ choices: [{ delta: { content: 'ok' } }] }]]);
   const big = 'x'.repeat(100000);
   const messages = [
-    { role: 'user', text: big }, { role: 'assistant', text: 'a', calls: [{ id: 'c0', name: 'list_sheets', args: {} }], raw: [{ functionCall: { name: 'list_sheets', args: {} } }] },
+    { role: 'user', text: big }, { role: 'assistant', text: 'a', calls: [{ id: 'c0', name: 'list_sheets', args: {} }] },
     { role: 'tool', results: [{ id: 'c0', name: 'list_sheets', text: 'r' }] }, { role: 'assistant', text: 'b', calls: [] },
     { role: 'user', text: 'recent question' },
   ];
   try {
     await ai.runAgent({ provider: fake.provider, system: 's', messages, tools: [], imageDir: tmp });
-    const sent = fake.bodies[0].contents;
-    assert.equal(sent.length, 1, 'only the recent turn is sent');
-    assert.equal(sent[0].parts[0].text, 'recent question');
+    const sent = fake.bodies[0].messages;
+    assert.deepEqual(sent.map((m) => m.role), ['system', 'user'], 'only the recent turn is sent');
+    assert.equal(sent[1].content, 'recent question');
     assert.equal(messages.length, 6, 'the stored transcript is untouched');
   } finally { fake.close(); }
 });
 
-await ok('a rejected API key gives a clear error', async () => {
-  const fake = http.createServer((req, res) => { req.resume().on('end', () => { res.writeHead(403, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'API key not valid' } })); }); });
-  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+// a fake OpenAI-style server: reply n is a list of stream chunks (objects), or {status, body} for an error
+async function fakeChat(replies) {
+  const bodies = [], headers = [];
+  const srv = http.createServer((req, res) => { let b = ''; req.on('data', (d) => { b += d; }).on('end', async () => {
+    bodies.push(JSON.parse(b));
+    headers.push({ auth: req.headers.authorization, url: req.url });
+    const r = replies[bodies.length - 1] || [{ choices: [{ delta: { content: 'end' } }] }];
+    if (r.status) { res.writeHead(r.status, { 'content-type': 'application/json' }); res.end(JSON.stringify(r.body)); return; }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(': OPENROUTER PROCESSING\n\n');
+    for (const c of r) { const e = `data: ${JSON.stringify(c)}\n\n`; res.write(e.slice(0, 15)); await new Promise((x) => setTimeout(x, 2)); res.write(e.slice(15)); } // events split mid-way
+    res.end('data: [DONE]\n\n');
+  }); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const baseUrl = `http://127.0.0.1:${srv.address().port}/api/v1`;
+  return { bodies, headers, baseUrl, provider: ai.openrouterProvider({ apiKey: 'k', model: 'vendor/model', baseUrl, fallbacks: ['vendor/backup'] }), close: () => srv.close() };
+}
+
+await ok('OpenRouter loop: streamed tool calls, reasoning replay, tool images, usage and cost', async () => {
+  const s4 = lib.openSession('t4', tmp);
+  const d = (delta) => ({ choices: [{ delta }] });
+  const fake = await fakeChat([
+    [d({ content: 'Look' }), d({ content: 'ing. ', reasoning_details: [{ type: 'reasoning.text', index: 0, text: 'thi' }] }), d({ reasoning_details: [{ type: 'reasoning.text', index: 0, text: 'nk', signature: 'sg' }] }),
+      d({ tool_calls: [{ index: 0, id: 'call_a', type: 'function', function: { name: 'edit_sheet', arguments: '{"sheet":"1","ops":"[{\\"op\\":' } }] }),
+      d({ tool_calls: [{ index: 0, function: { arguments: '\\"add\\",\\"sym\\":\\"resistor\\",\\"x\\":100,\\"y\\":100}]"}' } }] }),
+      d({ tool_calls: [{ index: 1, id: 'call_b', type: 'function', function: { name: 'snapshot', arguments: '{"sheet":"1","width":400}' } }] }),
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 100, completion_tokens: 20, cost: 0.001 } }],
+    [d({ content: 'Done.' }), { choices: [], usage: { prompt_tokens: 150, completion_tokens: 5, cost: 0.002 } }],
+  ]);
+  const text = [];
+  s4.chat.push({ role: 'user', text: 'draw a resistor', ctx: '[voltbridge] test\n\n', images: [] });
   try {
-    await assert.rejects(ai.runAgent({ provider: ai.geminiProvider({ apiKey: 'bad', baseUrl: `http://127.0.0.1:${fake.address().port}` }), system: 's', messages: [{ role: 'user', text: 'hi' }], tools: [], imageDir: tmp }), /GEMINI_API_KEY/);
+    const usage = await ai.runAgent({ provider: fake.provider, system: 'sys', messages: s4.chat, tools: ai.apiTools(lib.toolDefs(s4, toolCtx)), imageDir: tmp, onText: (t) => text.push(t) });
+    assert.equal(text.join(''), 'Looking. Done.');
+    assert.ok(s4.docs[1].parts.some((p) => p.sym === 'resistor'), 'arguments streamed in pieces were joined and ran');
+    assert.equal(usage.prompt, 250); assert.equal(usage.output, 25); assert.ok(Math.abs(usage.cost - 0.003) < 1e-9);
+    assert.deepEqual(fake.headers[0], { auth: 'Bearer k', url: '/api/v1/chat/completions' });
+    const b0 = fake.bodies[0];
+    assert.equal(b0.model, 'vendor/model'); assert.deepEqual(b0.models, ['vendor/model', 'vendor/backup']);
+    assert.deepEqual(b0.provider, { require_parameters: true, data_collection: 'deny' });
+    assert.equal(b0.messages[0].role, 'system');
+    assert.equal(b0.messages[1].content, '[voltbridge] test\n\ndraw a resistor');
+    assert.ok(b0.tools.some((t) => t.type === 'function' && t.function.name === 'edit_sheet' && t.function.parameters.type === 'object'));
+    const m = fake.bodies[1].messages; // system, user, assistant(2 calls), tool, tool, user(images)
+    assert.deepEqual(m.slice(1).map((x) => x.role), ['user', 'assistant', 'tool', 'tool', 'user']);
+    assert.deepEqual(m[2].tool_calls.map((c) => [c.id, c.function.name]), [['call_a', 'edit_sheet'], ['call_b', 'snapshot']]);
+    assert.equal(m[2].reasoning_details[0].text, 'think'); assert.equal(m[2].reasoning_details[0].signature, 'sg');
+    assert.deepEqual(m.slice(3, 5).map((x) => x.tool_call_id), ['call_a', 'call_b']);
+    assert.ok(m[5].content.some((c) => c.type === 'image_url' && c.image_url.url.startsWith('data:image/png;base64,')), 'snapshot goes to the model as an image');
   } finally { fake.close(); }
+});
+
+await ok('OpenRouter: image fallback, key, credits and missing model errors', async () => {
+  const s5 = lib.openSession('t5', tmp);
+  const fake = await fakeChat([
+    [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'snapshot', arguments: '{"sheet":"1","width":400}' } }] } }] }],
+    { status: 400, body: { error: { message: 'no image input' } } },
+  ]);
+  try {
+    const messages = [{ role: 'user', text: 'look' }];
+    await ai.runAgent({ provider: fake.provider, system: 's', messages, tools: ai.apiTools(lib.toolDefs(s5, toolCtx)), imageDir: tmp });
+    const json = (i) => JSON.stringify(fake.bodies[i].messages);
+    assert.ok(json(1).includes('image_url') && !json(2).includes('image_url'), 'after a 400 it retries without images');
+  } finally { fake.close(); }
+  for (const [status, re] of [[401, /OPENROUTER_API_KEY/], [402, /out of credits/]]) {
+    const f = await fakeChat([{ status, body: { error: { message: 'x' } } }]);
+    try { await assert.rejects(ai.runAgent({ provider: f.provider, system: 's', messages: [{ role: 'user', text: 'hi' }], tools: [], imageDir: tmp }), re); } finally { f.close(); }
+  }
+  assert.throws(() => ai.openrouterProvider({ apiKey: 'k' }), /OPENROUTER_MODEL/);
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

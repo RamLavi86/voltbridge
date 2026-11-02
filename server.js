@@ -9,7 +9,7 @@ import { query, getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import * as lib from './lib.js';
 import * as ai from './ai.js';
 
-// Settings such as GEMINI_API_KEY can live in a git-ignored .env next to this file; real environment variables win.
+// Settings such as OPENROUTER_API_KEY can live in a git-ignored .env next to this file; real environment variables win.
 try { process.loadEnvFile(fileURLToPath(new URL('./.env', import.meta.url))); } catch { /* no .env */ }
 
 // The SDK can reject an internal promise after a failed turn; chat() already reported it, so don't let Node die.
@@ -28,10 +28,12 @@ const tokenFile = path.join(lib.HOME, 'token');
 const TOKEN = LOCAL ? null : process.env.VOLTBRIDGE_TOKEN || (fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, 'utf8').trim()
   : (fs.mkdirSync(lib.HOME, { recursive: true }), fs.writeFileSync(tokenFile, crypto.randomBytes(18).toString('base64url'), { mode: 0o600 }), fs.readFileSync(tokenFile, 'utf8')));
 // Who answers the chat. 'claude' is the Claude Code engine: Bash and file access with no prompts, so local only.
-// 'gemini' calls the Gemini API with just the voltbridge tools (ai.js), which is what a hosted server uses.
-const PROVIDER = process.env.VOLTBRIDGE_PROVIDER || (LOCAL ? 'claude' : 'gemini');
-if (!['claude', 'gemini'].includes(PROVIDER)) throw new Error(`VOLTBRIDGE_PROVIDER must be claude or gemini, not "${PROVIDER}"`);
-const ASSISTANT = PROVIDER === 'claude' ? 'Claude' : 'Gemini';
+// 'openrouter' calls an API with just the voltbridge tools (ai.js), which is what a hosted server uses.
+const PROVIDER = process.env.VOLTBRIDGE_PROVIDER || (LOCAL ? 'claude' : 'openrouter');
+const PROVIDERS = { claude: { name: 'Claude' }, openrouter: { name: 'OpenRouter', key: 'OPENROUTER_API_KEY', model: 'OPENROUTER_MODEL' } };
+if (!PROVIDERS[PROVIDER]) throw new Error(`VOLTBRIDGE_PROVIDER must be one of ${Object.keys(PROVIDERS).join(', ')}, not "${PROVIDER}"`);
+const ASSISTANT = PROVIDERS[PROVIDER].name;
+const KEY_VAR = PROVIDERS[PROVIDER].key;
 // Off loopback the Claude engine stays off unless VOLTBRIDGE_CHAT=1, and clients can't pick the working or output folders on the server's disk.
 const CHAT = LOCAL || PROVIDER !== 'claude' || process.env.VOLTBRIDGE_CHAT === '1';
 const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -127,7 +129,8 @@ const imgUrls = (s, line) => line.slice(IMG_LINE.length).split(', ').map((f) => 
 async function chat(s, text, images = [], sheetId, selection = []) {
   if (!CHAT) return broadcast(s, { t: 'error', text: 'Chat is turned off on this server. The schematic editor works as usual.' });
   if (s.q) return broadcast(s, { t: 'error', text: `${ASSISTANT} is still working; press Stop first.` });
-  if (PROVIDER !== 'claude' && !process.env.GEMINI_API_KEY) return broadcast(s, { t: 'error', text: 'GEMINI_API_KEY is not set on the server, so chat cannot run.' });
+  if (PROVIDER !== 'claude' && !process.env[KEY_VAR]) return broadcast(s, { t: 'error', text: `${KEY_VAR} is not set on the server, so chat cannot run.` });
+  if (PROVIDER === 'openrouter' && !process.env.OPENROUTER_MODEL) return broadcast(s, { t: 'error', text: 'OPENROUTER_MODEL is not set on the server, so chat cannot run.' });
   const files = images.length ? lib.saveImages(s, images) : [];
   text = text.trim() || (files.length ? DEFAULT_IMAGE_ASK : '');
   if (!text) return;
@@ -174,7 +177,11 @@ async function chat(s, text, images = [], sheetId, selection = []) {
 
 // The API path: our own transcript (s.chat, saved as chat.json) and the loop in ai.js.
 let apiProvider; // shared, so what it learns about the model (no images in tool turns) lasts
-const getProvider = () => (apiProvider ||= ai.geminiProvider({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || undefined, baseUrl: process.env.GEMINI_BASE_URL || undefined }));
+const getProvider = () => (apiProvider ||= ai.openrouterProvider({
+  apiKey: process.env.OPENROUTER_API_KEY, model: process.env.OPENROUTER_MODEL, baseUrl: process.env.OPENROUTER_BASE_URL || undefined,
+  fallbacks: (process.env.OPENROUTER_FALLBACKS || '').split(',').map((x) => x.trim()).filter(Boolean),
+  dataCollection: process.env.OPENROUTER_DATA_COLLECTION === 'allow' ? 'allow' : 'deny',
+}));
 async function chatApi(s, text, ctx, files) {
   const ac = new AbortController();
   s.q = { interrupt: () => ac.abort() };
@@ -182,7 +189,7 @@ async function chatApi(s, text, ctx, files) {
   try {
     s.chat.push({ role: 'user', text, ctx, images: files });
     save();
-    await ai.runAgent({
+    const usage = await ai.runAgent({
       provider: getProvider(),
       system: API_PROMPT,
       messages: s.chat,
@@ -194,6 +201,7 @@ async function chatApi(s, text, ctx, files) {
       onToolDone: (c, r) => broadcast(s, { t: 'tool_done', id: c.id, error: r.isError }),
       onMessage: save,
     });
+    console.log(`[${s.name}] ${getProvider().model}: ${usage.prompt} tokens in, ${usage.output} out${usage.cost != null ? `, $${usage.cost.toFixed(4)}` : ''}`);
   } catch (e) {
     if (!ac.signal.aborted) broadcast(s, { t: 'error', text: String(e.message || e) });
   } finally {
@@ -272,5 +280,5 @@ wss.on('connection', (ws) => {
   ws.on('close', () => s?.clients.delete(ws));
 });
 
-server.listen(PORT, HOST, () => console.log(`voltbridge on http://${HOST}:${PORT}  (default cwd ${CWD})\n  chat: ${CHAT ? `${ASSISTANT}${PROVIDER === 'gemini' ? ` (${process.env.GEMINI_MODEL || 'default model'}${process.env.GEMINI_API_KEY ? '' : ', GEMINI_API_KEY missing'})` : ''}` : 'off'}` +
+server.listen(PORT, HOST, () => console.log(`voltbridge on http://${HOST}:${PORT}  (default cwd ${CWD})\n  chat: ${CHAT ? `${ASSISTANT}${PROVIDER !== 'claude' ? ` (${process.env[PROVIDERS[PROVIDER].model] || 'OPENROUTER_MODEL missing'}${process.env[KEY_VAR] ? '' : `, ${KEY_VAR} missing`})` : ''}` : 'off'}` +
   (TOKEN && !process.env.VOLTBRIDGE_TOKEN ? `\n  open once from another machine: http://${os.hostname()}:${PORT}/?token=${TOKEN}` : '')));

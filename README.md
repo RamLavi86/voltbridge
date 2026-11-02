@@ -23,7 +23,7 @@ npm test               # model, tools, sessions; writes test-out/sheet*.png
 | `VOLTBRIDGE_CWD` | `~/ioe`, else home | Working folder for new projects. |
 | `VOLTBRIDGE_SESSIONS` | `~/.voltbridge/sessions` | Where projects are stored. |
 
-**Gemini instead of Claude.** Put `GEMINI_API_KEY` (from https://aistudio.google.com/apikey) in a git-ignored `.env` (see `.env.example`) and start with `VOLTBRIDGE_PROVIDER=gemini`. The model then only has the voltbridge tools, with no shell or file access. A hosted server (`HOST` not loopback) uses Gemini automatically.
+**OpenRouter instead of Claude.** Set `OPENROUTER_API_KEY` (https://openrouter.ai/keys) and `OPENROUTER_MODEL`, the id of a model that supports tools (https://openrouter.ai/models?supported_parameters=tools), in a git-ignored `.env` (see `.env.example`) or the host environment, and start with `VOLTBRIDGE_PROVIDER=openrouter`. The model then only has the voltbridge tools, with no shell or file access. A hosted server (`HOST` not loopback) uses OpenRouter automatically. Prompts go only to providers that do not store them or train on them, unless you set `OPENROUTER_DATA_COLLECTION=allow`.
 
 ## Editor
 

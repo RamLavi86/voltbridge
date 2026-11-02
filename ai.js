@@ -1,5 +1,5 @@
-// Chat with an API model (Gemini) over the voltbridge tools. Unlike the Claude Code engine in server.js, the model only gets
-// the tools passed in: no shell, no file access. To add a provider, write another object with step() like geminiProvider.
+// Chat with an API model (OpenRouter) over the voltbridge tools. Unlike the Claude Code engine in server.js, the model only gets
+// the tools passed in: no shell, no file access. To add a provider, write another object with step() like openaiProvider.
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -10,11 +10,11 @@ const sleep = (ms, signal) => new Promise((res, rej) => {
 });
 
 // ---------- tool declarations ----------
-// Gemini rejects objects without properties, so a free-form object (or an array of them) is declared as a string holding JSON,
+// Some providers reject objects without properties, so a free-form object (or an array of them) is declared as a string holding JSON,
 // and decoded again before the handler runs.
 const free = (n) => n.type === 'object' && !Object.keys(n.properties || {}).length;
 const json = (v) => { if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch { return v; } };
-function clean(n) { // JSON schema node -> [schema in Gemini's subset, decode(value)]
+function clean(n) { // JSON schema node -> [schema without free-form objects, decode(value)]
   if (!n.type) return [{ type: 'string', description: `${n.description || ''} (any JSON value, JSON-encoded)`.trim() }, json];
   if (free(n)) return [{ type: 'string', description: `${n.description || ''} (a JSON-encoded object)`.trim() }, json];
   if (n.type === 'array' && n.items && (free(n.items) || !n.items.type)) {
@@ -64,6 +64,7 @@ export async function runAgent({ provider, system, messages, tools, signal, onTe
     const r = await provider.step({ system, messages, tools, signal, onText, imageDir });
     usage.prompt += r.usage?.prompt || 0;
     usage.output += r.usage?.output || 0;
+    if (r.usage?.cost != null) usage.cost = (usage.cost || 0) + r.usage.cost; // credits spent, when the provider reports it
     messages.push({ role: 'assistant', text: r.text, calls: r.calls, raw: r.raw });
     onMessage?.();
     if (!r.calls.length) return usage;
@@ -89,7 +90,7 @@ export async function runAgent({ provider, system, messages, tools, signal, onTe
   throw new Error(`Stopped after ${maxSteps} steps without finishing. Ask again to continue.`);
 }
 
-// ---------- Gemini ----------
+// ---------- history trimming and streaming, shared by providers ----------
 const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
 const KEEP = 60; // messages sent to the model; older ones are dropped at a user turn
 const BUDGET = 90000; // characters (~25k tokens) of history per request, not counting images; older turns are dropped first
@@ -97,7 +98,11 @@ const READ = new Set(['get_sheet', 'get_netlist', 'get_bom', 'list_sheets']);
 
 // Every request resends the whole conversation, so what is sent is trimmed: only the newest copy of a repeated read stays in
 // full, only the newest pasted image is attached, and the oldest turns go once the history passes BUDGET.
-function contents(messages, imageDir, shots) {
+const OLD = '(older result left out: a later identical call has the current one)';
+const userText = (m, i, lastImg) => (m.ctx || '') + m.text + (m.images?.length && i !== lastImg ? ` [${m.images.length} image(s) were attached here; not shown again]` : '');
+
+// The window of messages to send, and which of them carry the newest image, the newest tool turn, and stale reads.
+function view(messages) {
   const from = messages.length > KEEP ? messages.findIndex((m, i) => i >= messages.length - KEEP && m.role === 'user') : 0;
   const msgs = messages.slice(from < 0 ? 0 : from);
   const lastTool = msgs.findLastIndex((m) => m.role === 'tool');
@@ -106,74 +111,119 @@ function contents(messages, imageDir, shots) {
   for (const m of msgs) for (const c of m.calls || []) args[c.id] = JSON.stringify(c.args);
   const latest = new Map(); // a read repeated later with the same arguments makes the earlier result stale
   msgs.forEach((m, i) => { if (m.role === 'tool') for (const r of m.results) if (READ.has(r.name)) latest.set(r.name + args[r.id], i); });
-  const out = msgs.map((m, i) => {
-    if (m.role === 'user') {
-      const parts = [];
-      if (i === lastImg) {
-        for (const f of m.images) {
-          try { parts.push({ inlineData: { mimeType: MIME[path.extname(f)] || 'image/png', data: fs.readFileSync(path.join(imageDir, f)).toString('base64') } }); } catch { /* file gone */ }
-        }
-      }
-      parts.push({ text: (m.ctx || '') + m.text + (m.images?.length && i !== lastImg ? ` [${m.images.length} image(s) were attached here; not shown again]` : '') });
-      return { role: 'user', parts };
-    }
-    if (m.role === 'assistant') {
-      const parts = m.raw?.length ? m.raw : [...(m.text ? [{ text: m.text }] : []), ...(m.calls || []).map((c) => ({ functionCall: { name: c.name, args: c.args } }))];
-      return { role: 'model', parts: parts.length ? parts : [{ text: '(no reply)' }] };
-    }
-    const parts = m.results.map((r) => {
-      const stale = READ.has(r.name) && latest.get(r.name + args[r.id]) !== i;
-      return { functionResponse: { name: r.name, response: r.isError ? { error: r.text } : { result: stale ? '(older result left out: a later identical call has the current one)' : r.text } } };
-    });
-    if (shots && i === lastTool) for (const r of m.results) for (const s of r.shots || []) parts.push({ inlineData: { mimeType: s.mime, data: s.data } });
-    return { role: 'user', parts };
-  });
-  const size = (c) => JSON.stringify(c.parts.map((p) => (p.inlineData ? 0 : p))).length;
-  const turnStart = (c) => c.role === 'user' && !c.parts.some((p) => p.functionResponse);
-  let total = out.reduce((a, c) => a + size(c), 0), first = 0;
-  while (total > BUDGET) {
-    const j = out.findIndex((c, k) => k > first && turnStart(c));
-    if (j < 0) break;
-    for (let k = first; k < j; k++) total -= size(out[k]);
-    first = j;
-  }
-  return out.slice(first);
+  const stale = (r, i) => READ.has(r.name) && latest.get(r.name + args[r.id]) !== i;
+  return { msgs, lastTool, lastImg, stale };
 }
 
-const plain = (p) => Object.keys(p).length === 1 && typeof p.text === 'string';
+// entries: [{size, turn}] in send order (turn: starts a user turn). Returns the index of the first one to keep: the oldest
+// turns go while the total is over BUDGET.
+function fit(entries) {
+  let total = entries.reduce((a, e) => a + e.size, 0), first = 0;
+  while (total > BUDGET) {
+    const j = entries.findIndex((e, k) => k > first && e.turn);
+    if (j < 0) break;
+    for (let k = first; k < j; k++) total -= entries[k].size;
+    first = j;
+  }
+  return first;
+}
 
-export function geminiProvider({ apiKey, model = 'gemini-3.5-flash', baseUrl = 'https://generativelanguage.googleapis.com' }) {
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
+function sse(res, handle) { // calls handle(data) for each data line group of a server-sent-events body
+  return (async () => {
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.search(/\r?\n\r?\n/)) >= 0) {
+        const ev = buf.slice(0, i);
+        buf = buf.slice(i).replace(/^\r?\n\r?\n/, '');
+        const data = ev.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
+        if (data) handle(data);
+      }
+    }
+  })();
+}
+
+// ---------- OpenAI-style chat completions (OpenRouter, or any server with the same API) ----------
+const dataUrl = (mime, b64) => `data:${mime};base64,${b64}`;
+
+function chatMessages(system, messages, imageDir, shots) {
+  const { msgs, lastTool, lastImg, stale } = view(messages);
+  const parts = []; // [{wire: [message], turn}]
+  msgs.forEach((m, i) => {
+    if (m.role === 'user') {
+      const imgs = [];
+      if (i === lastImg) {
+        for (const f of m.images) {
+          try { imgs.push({ type: 'image_url', image_url: { url: dataUrl(MIME[path.extname(f)] || 'image/png', fs.readFileSync(path.join(imageDir, f)).toString('base64')) } }); } catch { /* file gone */ }
+        }
+      }
+      const text = userText(m, i, lastImg);
+      parts.push({ wire: [{ role: 'user', content: imgs.length ? [...imgs, { type: 'text', text }] : text }], turn: true });
+    } else if (m.role === 'assistant') {
+      const a = { role: 'assistant', content: m.text || (m.calls?.length ? null : '(no reply)') };
+      if (m.calls?.length) a.tool_calls = m.calls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } }));
+      if (m.raw?.reasoning_details?.length) a.reasoning_details = m.raw.reasoning_details; // some providers need the reasoning back with tool results
+      parts.push({ wire: [a], turn: false });
+    } else {
+      const wire = m.results.map((r) => ({ role: 'tool', tool_call_id: r.id, content: r.isError ? `error: ${r.text}` : stale(r, i) ? OLD : r.text }));
+      const pics = shots && i === lastTool ? m.results.flatMap((r) => (r.shots || []).map((s) => ({ type: 'image_url', image_url: { url: dataUrl(s.mime, s.data) } }))) : [];
+      // a tool message holds text only, so tool images ride in a user message right after
+      if (pics.length) wire.push({ role: 'user', content: [{ type: 'text', text: 'Images returned by the tool call(s) above:' }, ...pics] });
+      parts.push({ wire, turn: false });
+    }
+  });
+  const size = (p) => JSON.stringify(p.wire.map((w) => (Array.isArray(w.content) ? { ...w, content: w.content.filter((c) => c.type === 'text') } : w))).length;
+  return [{ role: 'system', content: system }, ...parts.slice(fit(parts.map((p) => ({ size: size(p), turn: p.turn })))).flatMap((p) => p.wire)];
+}
+
+// reasoning_details arrive in pieces; pieces with the same type and index are one entry whose text grows
+function mergeDetail(list, x) {
+  const cur = list.find((y) => y.type === x.type && y.index === x.index);
+  if (!cur) { list.push({ ...x }); return; }
+  for (const [k, v] of Object.entries(x)) cur[k] = (k === 'text' || k === 'summary') && typeof v === 'string' ? (cur[k] || '') + v : v;
+}
+
+// Options: model (required), baseUrl, keyVar (named in the "key rejected" message), label, headers, extra (merged into the request
+// body, e.g. OpenRouter routing preferences).
+export function openaiProvider({ name = 'openai', label = 'The model server', apiKey, model, baseUrl, keyVar = 'the API key', headers = {}, extra = {} }) {
+  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   let shots = true; // some models refuse images inside a tool turn: then we fall back to text only
 
   async function post(body, signal) {
     for (let attempt = 0; ; attempt++) {
-      const res = await fetch(url, { method: 'POST', signal, headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body) });
+      const res = await fetch(url, { method: 'POST', signal, headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}`, ...headers }, body: JSON.stringify(body) });
       if (res.ok) return res;
       const j = await res.json().catch(() => ({}));
-      const err = j.error?.message;
-      if ([429, 500, 503].includes(res.status) && attempt < 2) {
-        // a 429 says how long to wait ("retryDelay": "23s"); per-minute limits need that, not 2 seconds
-        const asked = parseFloat(j.error?.details?.find((d) => d.retryDelay)?.retryDelay) || 0;
-        await sleep(Math.min(Math.max(asked + 1, 2 * (attempt + 1)), 30) * 1000, signal);
+      const err = j.error?.message || j.message || res.statusText;
+      if ([429, 500, 502, 503].includes(res.status) && attempt < 2) {
+        const asked = parseFloat(res.headers.get('retry-after')) || 0;
+        await sleep(Math.min(Math.max(asked, 2 * (attempt + 1)), 30) * 1000, signal);
         continue;
       }
-      const e = new Error(res.status === 429 ? 'Gemini is rate limiting this server (the free tier is shared by all users). Try again in a minute.'
-        : res.status === 401 || res.status === 403 || /API key/i.test(err || '') ? 'The Gemini API key was rejected. Check GEMINI_API_KEY.'
-        : `Gemini error ${res.status}: ${String(err || res.statusText).slice(0, 300)}`);
+      const e = new Error(res.status === 401 ? `${label} rejected the API key. Check ${keyVar}.`
+        : res.status === 402 ? `${label} says the account is out of credits. Add credits and try again.`
+        : res.status === 429 ? `${label} is rate limiting this server. Try again in a minute.`
+        : `${label} error ${res.status}: ${String(err).slice(0, 300)}`);
       e.status = res.status;
       throw e;
     }
   }
 
   return {
-    name: 'gemini',
+    name,
     model,
     async step({ system, messages, tools, signal, onText, imageDir }) {
       const body = (withShots) => ({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: contents(messages, imageDir, withShots),
-        tools: [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, ...(t.parameters ? { parameters: t.parameters } : {}) })) }],
+        model,
+        messages: chatMessages(system, messages, imageDir, withShots),
+        tools: tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters || { type: 'object', properties: {} } } })),
+        stream: true,
+        ...extra,
       });
       let res;
       try { res = await post(body(shots), signal); } catch (e) {
@@ -182,39 +232,46 @@ export function geminiProvider({ apiKey, model = 'gemini-3.5-flash', baseUrl = '
         shots = false;
         res = await post(body(false), signal);
       }
-      const out = { text: '', calls: [], raw: [], usage: null };
+      const out = { text: '', calls: [], raw: null, usage: null };
+      const calls = [], details = [];
       let finish = '';
-      const handle = (chunk) => {
-        if (chunk.promptFeedback?.blockReason) throw new Error(`Gemini blocked the request (${chunk.promptFeedback.blockReason}).`);
-        if (chunk.usageMetadata) out.usage = { prompt: chunk.usageMetadata.promptTokenCount, output: chunk.usageMetadata.candidatesTokenCount };
-        const cand = chunk.candidates?.[0];
-        if (!cand) return;
-        finish = cand.finishReason || finish;
-        for (const p of cand.content?.parts || []) {
-          const last = out.raw.at(-1);
-          if (plain(p) && last && plain(last)) last.text += p.text; else out.raw.push({ ...p });
-          if (p.thought) continue;
-          if (typeof p.text === 'string' && p.text) { out.text += p.text; onText?.(p.text); }
-          if (p.functionCall) out.calls.push({ id: `c${messages.length}-${out.calls.length}`, name: p.functionCall.name, args: p.functionCall.args || {} });
+      await sse(res, (data) => {
+        if (data === '[DONE]') return;
+        const c = JSON.parse(data);
+        if (c.error) throw new Error(`${label} error: ${String(c.error.message || JSON.stringify(c.error)).slice(0, 300)}`);
+        if (c.usage) out.usage = { prompt: c.usage.prompt_tokens, output: c.usage.completion_tokens, ...(c.usage.cost != null ? { cost: c.usage.cost } : {}) };
+        const ch = c.choices?.[0];
+        if (!ch) return;
+        finish = ch.finish_reason || finish;
+        const d = ch.delta || {};
+        if (d.content) { out.text += d.content; onText?.(d.content); }
+        for (const x of d.reasoning_details || []) mergeDetail(details, x);
+        for (const t of d.tool_calls || []) {
+          const cur = (calls[t.index ?? 0] ||= { id: '', name: '', args: '' });
+          if (t.id) cur.id = t.id;
+          if (t.function?.name && !cur.name) cur.name = t.function.name;
+          if (t.function?.arguments) cur.args += t.function.arguments;
         }
-      };
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let i;
-        while ((i = buf.search(/\r?\n\r?\n/)) >= 0) {
-          const ev = buf.slice(0, i);
-          buf = buf.slice(i).replace(/^\r?\n\r?\n/, '');
-          const data = ev.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
-          if (data) handle(JSON.parse(data));
-        }
-      }
-      if (!out.text && !out.calls.length && /SAFETY|RECITATION|PROHIBITED|BLOCKLIST/.test(finish)) throw new Error(`Gemini stopped without an answer (${finish}). Rephrase and try again.`);
+      });
+      out.calls = calls.filter(Boolean).map((c, i) => {
+        let args = {};
+        try { args = JSON.parse(c.args || '{}'); } catch { /* cut off or malformed: the tool reports what is missing */ }
+        return { id: c.id || `c${messages.length}-${i}`, name: c.name, args };
+      });
+      if (details.length) out.raw = { reasoning_details: details };
+      if (!out.text && !out.calls.length && finish === 'content_filter') throw new Error(`${label} stopped without an answer (content filter). Rephrase and try again.`);
       return out;
     },
   };
+}
+
+// OpenRouter: one key, many models. Routing is limited to providers that do not store prompts or train on them
+// (dataCollection 'deny'); require_parameters keeps the request on providers that support tools.
+export function openrouterProvider({ apiKey, model, baseUrl = 'https://openrouter.ai/api/v1', fallbacks = [], dataCollection = 'deny' }) {
+  if (!model) throw new Error('OPENROUTER_MODEL is not set. Pick a model that supports tools at https://openrouter.ai/models?supported_parameters=tools and copy its id.');
+  return openaiProvider({
+    name: 'openrouter', label: 'OpenRouter', keyVar: 'OPENROUTER_API_KEY', apiKey, model, baseUrl,
+    headers: { 'x-title': 'Voltbridge' },
+    extra: { usage: { include: true }, provider: { require_parameters: true, data_collection: dataCollection }, ...(fallbacks.length ? { models: [model, ...fallbacks] } : {}) },
+  });
 }
