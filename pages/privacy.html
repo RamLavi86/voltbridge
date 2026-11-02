@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voltbridge privacy policy</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --fg: #1b1f24; --mute: #5b6470; --line: #d8dde3; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #14171a; --fg: #e7eaee; --mute: #98a1ad; --line: #2c333a; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, sans-serif; }
+  main { max-width: 42rem; margin: 0 auto; padding: 2rem 16px 4rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.1rem; margin: 2rem 0 .25rem; }
+  p, li { margin: .4rem 0; }
+  .mute { color: var(--mute); }
+  a { color: inherit; }
+  nav { border-top: 1px solid var(--line); margin-top: 2.5rem; padding-top: 1rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Voltbridge privacy policy</h1>
+<p class="mute">Last updated 2 November 2026</p>
+
+<p>Voltbridge is an experimental web app for sketching electrical schematics with an AI assistant. It is run by an individual, not a company. This page says what it keeps and where it goes.</p>
+
+<h2>What we collect</h2>
+<ul>
+  <li><strong>Your Google account email address</strong> and a user id, when you sign in with Google. Sign-in is handled by Supabase. We never see your Google password.</li>
+  <li><strong>Your drawings and chat messages:</strong> the schematic sheets you or the assistant create, the text you type, and images you paste.</li>
+  <li><strong>Usage records:</strong> for each chat, the time, the model used, the number of tokens and the cost. They are used to apply spending limits.</li>
+</ul>
+
+<h2>Who receives it</h2>
+<ul>
+  <li><strong>Supabase</strong> stores sign-in and usage data.</li>
+  <li><strong>OpenRouter and the AI model provider it routes to</strong> receive your chat text, pasted images and the current sheet contents so the assistant can answer. We ask OpenRouter to use only providers that do not store prompts or train on them, but we cannot promise how a provider behaves.</li>
+  <li><strong>Render</strong> hosts the app and keeps your projects on the server.</li>
+</ul>
+<p>We do not sell your data, show ads, or share it for marketing.</p>
+
+<h2>Retention and deletion</h2>
+<p>Projects may be lost when the server restarts, because the current hosting has no permanent disk. Usage records are kept to enforce monthly limits. To have your data deleted, open an issue at the project page below and say which email address to remove.</p>
+
+<h2>Security</h2>
+<p>Access uses signed, HTTP-only cookies over HTTPS. Secret keys live only in the server's environment. This is a small project and no system is perfectly secure, so do not put confidential or personal information in your drawings or chats.</p>
+
+<h2>Contact</h2>
+<p>Questions or deletion requests: <a href="https://github.com/RamLavi86/voltbridge/issues">github.com/RamLavi86/voltbridge/issues</a>.</p>
+
+<nav><a href="/terms">Terms of service</a> · <a href="/">Back to Voltbridge</a></nav>
+</main>
+</body>
+</html>
